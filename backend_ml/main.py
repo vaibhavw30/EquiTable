@@ -45,6 +45,12 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        # Production
+        "https://equitable-app.vercel.app",
+        "https://equi-table.vercel.app",
+        # Wildcard for development/testing (tighten later)
+        "*",
+        # Local development
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:5175",
