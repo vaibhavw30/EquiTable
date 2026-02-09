@@ -1,0 +1,29 @@
+[
+  {
+    "name": "Atlanta Community Food Bank",
+    "address": "Atlanta area, GA",
+    "lat": 33.7489954,
+    "lng": -84.3879824,
+    "hours_notes": "Please refer to the website's food map for individual pantry hours.",
+    "eligibility_rules": [
+      "Visit the food pantry with a valid request.",
+      "Schedule an appointment if required.",
+      "Apply to relevant governmental programs as needed."
+    ],
+    "inventory_status": "Medium",
+    "source_url": "https://acfb.org/get-help/"
+  },
+  {
+    "name": "SVdP Georgia Support Center Food Pantry",
+    "address": "2050-C Chamblee Tucker Road, Atlanta, GA 30341",
+    "lat": 33.87844,
+    "lng": -84.29632,
+    "hours_notes": "Monday - Friday: 8:30 AM – 4:00 PM",
+    "eligibility_rules": [
+      "The form can only be used for food pick-up on Wednesdays.",
+      "Referrals to shop in the food pantry are no longer needed."
+    ],
+    "inventory_status": "Medium",
+    "source_url": "https://svdpgeorgia.org/get-help/food-assistance/"
+  }
+]
