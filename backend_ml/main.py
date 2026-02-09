@@ -41,11 +41,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware configuration - allow all origins for now
+# CORS middleware configuration
+# Use regex to match all Vercel preview/production URLs + localhost for dev
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
-    allow_credentials=False,  # Must be False when using wildcard
+    allow_origin_regex=r"https://.*\.vercel\.app|http://localhost:\d+|http://127\.0\.0\.1:\d+",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

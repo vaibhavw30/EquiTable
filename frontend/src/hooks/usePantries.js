@@ -4,6 +4,9 @@ import axios from 'axios'
 // Use environment variable for API URL, fallback to Render production URL
 const API_BASE = import.meta.env.VITE_API_URL || 'https://equitable.onrender.com'
 
+// Debug: log which API is being used
+console.log('[EquiTable] API_BASE:', API_BASE)
+
 export default function usePantries() {
   const [pantries, setPantries] = useState([])
   const [loading, setLoading] = useState(true)
