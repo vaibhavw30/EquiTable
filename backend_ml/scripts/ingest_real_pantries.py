@@ -112,7 +112,7 @@ PANTRY_SOURCES = [
         "Salvation Army Red Shield Services",
         "100 Edgewood Ave NE, Atlanta, GA 30303",
         33.7553, -84.3808,
-        "https://salvationarmyusa.org/atlanta",
+        "https://salvationarmygeorgia.org/atlanta",
     ),
     # ── Near Downtown (O4W / Grant Park / Ponce) ──
     (
@@ -131,7 +131,7 @@ PANTRY_SOURCES = [
         "Loaves & Fishes (St. John the Wonderworker)",
         "541 Atlanta Ave SE, Atlanta, GA 30315",
         33.7290, -84.3750,
-        "https://saintjohnwonderworker.org/loaves",
+        "https://saintjohnwonderworker.org",
     ),
 ]
 
@@ -229,8 +229,9 @@ async def main():
             succeeded += 1
             continue
 
-        # ── Extract via LLM ──
+        # ── Extract via LLM (with rate limit delay) ──
         update_data = await llm.extract_data(raw_text)
+        time.sleep(3)  # Delay to avoid Gemini rate limits
 
         if not update_data:
             print(f"  LLM EXTRACTION FAILED — inserting with defaults\n")

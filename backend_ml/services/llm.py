@@ -5,6 +5,7 @@ from raw scraped Markdown.
 
 import os
 import json
+from datetime import datetime
 from typing import Optional
 from google import genai
 from google.genai import types
@@ -14,25 +15,34 @@ from models.pantry import PantryUpdate, PantryStatus
 
 load_dotenv()
 
-SYSTEM_PROMPT = """\
+# Base system prompt - {current_date} will be injected at runtime
+SYSTEM_PROMPT_TEMPLATE = """\
 You are a data extraction agent for EquiTable, a food rescue app that helps \
 people find food pantries in Atlanta.
 
+TODAY IS: {current_date}
+
 You will receive raw Markdown scraped from a food pantry or church website. \
 Your job is to extract REAL, SPECIFIC information about their food \
-assistance programs. Follow these rules:
+assistance programs.
 
 HOURS:
 - Look for days and times (e.g. "Tuesday 1-6pm", "Mon-Fri 8:30am-4pm").
 - For hours_notes, include the FULL weekly schedule, not just one day.
-- For hours_today, determine today's hours from the schedule. If the \
-  pantry is not open today, say "Closed today".
-- Do NOT invent hours. If no schedule is on the page, say "Not listed on website".
+- For hours_today, use TODAY'S DATE ({current_date}) to determine the specific \
+  hours. Look at the schedule and find the hours for {day_of_week}.
+  - If the pantry is open today, return the hours (e.g., "10am-2pm").
+  - If the pantry is closed today, return "Closed today".
+  - If the schedule says "By Appointment", return "By appointment only".
+  - If no schedule is listed, return "Hours not listed".
+- Do NOT invent hours. Only extract what is explicitly stated.
 
 ELIGIBILITY:
 - Extract EVERY specific rule: residency requirements, ID requirements, \
   visit frequency limits, age priorities, family size limits, referral \
   requirements, appointment requirements.
+- If the page mentions "by appointment only", include that as a rule AND \
+  consider setting status to WAITLIST if availability seems limited.
 - If the page says things like "open to all" or "no questions asked", \
   include that as a rule.
 - If no rules are mentioned, return ["Open to all - no restrictions listed"].
@@ -44,10 +54,12 @@ ID REQUIREMENTS:
   (assume no ID needed unless stated).
 
 STATUS:
-- OPEN if the pantry appears to be actively serving food.
-- CLOSED only if the page explicitly says closed or discontinued.
-- WAITLIST if they mention waiting lists or limited capacity.
-- UNKNOWN only if the page has zero information about food programs.
+- OPEN if the pantry appears to be actively serving food on a regular schedule.
+- CLOSED only if the page explicitly says closed, discontinued, or suspended.
+- WAITLIST if they mention waiting lists, limited capacity, by-appointment-only \
+  with limited slots, or if they require pre-registration.
+- UNKNOWN only if the page has zero information about food programs \
+  (e.g., a generic church homepage with no mention of food assistance).
 
 CONFIDENCE:
 - Rate 1-10 based on how much FOOD-PANTRY-SPECIFIC info is on the page.
@@ -58,7 +70,7 @@ CONFIDENCE:
 Return a JSON object with these exact fields:
 - status: one of "OPEN", "CLOSED", "WAITLIST", "UNKNOWN"
 - hours_notes: string with full weekly schedule
-- hours_today: string with today's specific hours
+- hours_today: string with today's ({day_of_week}) specific hours
 - eligibility_rules: array of strings listing all requirements
 - is_id_required: boolean
 - residency_req: string or null
@@ -96,6 +108,18 @@ RESPONSE_SCHEMA = {
 }
 
 
+def get_current_date_context() -> tuple[str, str]:
+    """
+    Get the current date formatted for the LLM prompt.
+    Returns (full_date_string, day_of_week).
+    Example: ("Saturday, February 8, 2026", "Saturday")
+    """
+    now = datetime.now()
+    full_date = now.strftime("%A, %B %d, %Y")  # e.g., "Saturday, February 8, 2026"
+    day_of_week = now.strftime("%A")  # e.g., "Saturday"
+    return full_date, day_of_week
+
+
 class LLMService:
     """
     Service for extracting structured PantryUpdate data from raw Markdown
@@ -117,6 +141,14 @@ class LLMService:
 
         self.client = genai.Client(api_key=api_key)
 
+    def _build_system_prompt(self) -> str:
+        """Build system prompt with current date injected."""
+        current_date, day_of_week = get_current_date_context()
+        return SYSTEM_PROMPT_TEMPLATE.format(
+            current_date=current_date,
+            day_of_week=day_of_week,
+        )
+
     async def extract_data(self, raw_text: str) -> Optional[PantryUpdate]:
         """
         Extract structured PantryUpdate data from raw scraped text
@@ -129,11 +161,14 @@ class LLMService:
             A validated PantryUpdate instance, or None on failure.
         """
         try:
+            # Build prompt with current date
+            system_prompt = self._build_system_prompt()
+
             response = self.client.models.generate_content(
                 model="gemini-2.0-flash",
                 contents=raw_text,
                 config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
+                    system_instruction=system_prompt,
                     response_mime_type="application/json",
                     response_schema=RESPONSE_SCHEMA,
                 ),
