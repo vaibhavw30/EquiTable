@@ -8,3 +8,4 @@ firecrawl-py>=0.0.16
 google-generativeai>=0.8.0
 python-dotenv>=1.0.0
 httpx>=0.26.0
+google-genai
