@@ -41,24 +41,11 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware configuration
+# CORS middleware configuration - allow all origins for now
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        # Production
-        "https://equitable-app.vercel.app",
-        "https://equi-table.vercel.app",
-        # Wildcard for development/testing (tighten later)
-        "*",
-        # Local development
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:5175",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        "http://127.0.0.1:5175",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=False,  # Must be False when using wildcard
     allow_methods=["*"],
     allow_headers=["*"],
 )

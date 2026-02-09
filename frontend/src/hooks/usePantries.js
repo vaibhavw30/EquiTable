@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
 
-// Use environment variable for API URL, fallback to localhost for development
-const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+// Use environment variable for API URL, fallback to Render production URL
+const API_BASE = import.meta.env.VITE_API_URL || 'https://equitable.onrender.com'
 
 export default function usePantries() {
   const [pantries, setPantries] = useState([])
