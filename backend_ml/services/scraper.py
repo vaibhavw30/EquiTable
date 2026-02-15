@@ -1,39 +1,50 @@
 """
-Scraper Service - Uses Firecrawl to extract main content from pantry websites
+Scraper Service - Uses Crawl4AI to extract main content from pantry websites.
+
+Crawl4AI is the primary scraper (ADR-008). It is async-native, free,
+and produces LLM-optimized Markdown output.
+
+Firecrawl remains available as a dormant fallback (not imported at runtime).
 """
 
-import os
+import logging
+import time
 from typing import Optional
-from firecrawl import FirecrawlApp
-from dotenv import load_dotenv
 
-load_dotenv()
+from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
+
+logger = logging.getLogger("equitable")
+
+
+class ScrapeError(Exception):
+    """Raised when scraping fails after all attempts."""
+
+    def __init__(self, url: str, reason: str):
+        self.url = url
+        self.reason = reason
+        super().__init__(f"Scrape failed for {url}: {reason}")
 
 
 class ScraperService:
     """
-    Service for scraping pantry websites using Firecrawl.
-    Extracts main content as Markdown for further processing.
+    Service for scraping pantry websites using Crawl4AI.
+    Extracts main content as Markdown for LLM extraction.
     """
 
     def __init__(self):
-        """
-        Initialize the Firecrawl client with API key from environment.
+        self._browser_config = BrowserConfig(
+            headless=True,
+            verbose=False,
+        )
+        self._crawl_config = CrawlerRunConfig(
+            word_count_threshold=10,
+            exclude_external_links=True,
+            remove_overlay_elements=True,
+        )
 
-        Raises:
-            ValueError: If FIRECRAWL_KEY is not set in .env.
-        """
-        api_key = os.getenv("FIRECRAWL_KEY")
-        if not api_key:
-            raise ValueError("FIRECRAWL_KEY not found in .env")
-
-        self.app = FirecrawlApp(api_key=api_key)
-
-    def scrape_url(self, url: str) -> Optional[str]:
+    async def scrape_url(self, url: str) -> Optional[str]:
         """
         Scrape a URL and return its main content as Markdown.
-
-        Uses Firecrawl with onlyMainContent to avoid nav menus and footers.
 
         Args:
             url: The URL to scrape.
@@ -41,34 +52,45 @@ class ScraperService:
         Returns:
             The markdown content of the page, or None if scraping fails.
         """
+        start = time.time()
+        logger.info("Scrape starting", extra={"event": "scrape_start", "url": url, "tool": "crawl4ai"})
+
         try:
-            result = self.app.scrape(
-                url,
-                formats=["markdown"],
+            async with AsyncWebCrawler(config=self._browser_config) as crawler:
+                result = await crawler.arun(url=url, config=self._crawl_config)
+
+            duration_ms = round((time.time() - start) * 1000, 2)
+
+            if not result.success:
+                error_msg = getattr(result, "error_message", "Unknown error")
+                logger.error(
+                    "Scrape failed",
+                    extra={"event": "scrape_failed", "url": url, "tool": "crawl4ai", "error": error_msg, "duration_ms": duration_ms},
+                )
+                return None
+
+            markdown = result.markdown_v2.raw_markdown if hasattr(result, "markdown_v2") and result.markdown_v2 else result.markdown
+
+            if not markdown or len(markdown.strip()) < 20:
+                logger.error(
+                    "Scrape failed",
+                    extra={"event": "scrape_failed", "url": url, "tool": "crawl4ai", "error": "Empty or minimal content", "duration_ms": duration_ms},
+                )
+                return None
+
+            logger.info(
+                "Scrape complete",
+                extra={"event": "scrape_complete", "url": url, "tool": "crawl4ai", "content_length": len(markdown), "duration_ms": duration_ms},
             )
-
-            # Result is a Document object with a markdown attribute
-            if result and hasattr(result, "markdown") and result.markdown:
-                # Check for error pages (404, etc.)
-                if hasattr(result, "metadata") and result.metadata:
-                    status_code = getattr(result.metadata, "status_code", 200)
-                    if status_code and status_code >= 400:
-                        print(f"Failed to scrape {url}: HTTP {status_code}")
-                        return None
-
-                return result.markdown
-
-            print(f"Failed to scrape {url}: No markdown content in response")
-            return None
+            return markdown
 
         except Exception as e:
-            print(f"Failed to scrape {url}: {e}")
+            duration_ms = round((time.time() - start) * 1000, 2)
+            logger.error(
+                "Scrape failed",
+                extra={"event": "scrape_failed", "url": url, "tool": "crawl4ai", "error": str(e), "duration_ms": duration_ms},
+            )
             return None
-
-    # Async wrapper for use in FastAPI endpoints
-    async def scrape_pantry_website(self, url: str) -> Optional[str]:
-        """Async-compatible wrapper around scrape_url."""
-        return self.scrape_url(url)
 
 
 # Singleton instance for reuse

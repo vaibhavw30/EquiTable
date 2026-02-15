@@ -1,0 +1,16 @@
+{
+  "status": "UNKNOWN",
+  "hours_notes": "Not listed on website",
+  "hours_today": "Hours not listed",
+  "eligibility_rules": ["Open to all - no restrictions listed"],
+  "is_id_required": false,
+  "residency_req": null,
+  "special_notes": null,
+  "confidence": 2,
+  "_meta": {
+    "source_url": "https://example.org/new-hope-baptist",
+    "scraped_date": "2026-02-14",
+    "verified_by": "human",
+    "notes": "Generic church page. Mentions 'community meals' vaguely but no dedicated food pantry info, no hours, no rules. Very low confidence expected."
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "status": "CLOSED",
+  "hours_notes": "Normally Mon-Wed 2pm-5pm, Fri 10am-1pm (TEMPORARILY CLOSED for renovations)",
+  "hours_today": "Closed today",
+  "eligibility_rules": [
+    "Must reside in zip codes 30310, 30311, 30312, 30313, or 30315",
+    "Bring mail showing current address",
+    "Limit 2 visits per month per household"
+  ],
+  "is_id_required": true,
+  "residency_req": "Zip codes 30310, 30311, 30312, 30313, 30315",
+  "special_notes": "Temporarily closed since January 15, 2025 for building renovations. Expected to reopen Spring 2025. Contact Atlanta Community Food Bank (404) 555-0300 for immediate assistance.",
+  "confidence": 7,
+  "_meta": {
+    "source_url": "https://example.org/southside-pantry",
+    "scraped_date": "2026-02-14",
+    "verified_by": "human",
+    "notes": "Page with closure banner and strikethrough hours. Tests staleness detection - should extract CLOSED status. Note the 'last updated' date is over a year old."
+  }
+}

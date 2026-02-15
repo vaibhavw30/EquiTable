@@ -1,0 +1,21 @@
+{
+  "status": "OPEN",
+  "hours_notes": "Mon 9am-1pm, Wed 9am-1pm, Fri 9am-1pm, 2nd Sat 10am-12pm",
+  "hours_today": "9am-1pm",
+  "eligibility_rules": [
+    "Valid photo ID required (driver's license, state ID, or passport)",
+    "Proof of Atlanta residency required (utility bill, lease, or mail)",
+    "One visit per household per week",
+    "First-come, first-served"
+  ],
+  "is_id_required": true,
+  "residency_req": "Atlanta residents",
+  "special_notes": "Closed December 23 - January 2 for the holiday season. Arrive 30 minutes before closing.",
+  "confidence": 9,
+  "_meta": {
+    "source_url": "https://example.org/peachtree-pantry",
+    "scraped_date": "2026-02-14",
+    "verified_by": "human",
+    "notes": "Clean, well-structured page. All fields directly extractable. High confidence baseline."
+  }
+}

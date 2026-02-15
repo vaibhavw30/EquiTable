@@ -1,0 +1,21 @@
+{
+  "status": "OPEN",
+  "hours_notes": "Mon 9am-3pm, Wed 9am-3pm, Fri 9am-12pm, Sat 10am-1pm",
+  "hours_today": "9am-3pm",
+  "eligibility_rules": [
+    "No ID required",
+    "No proof of address needed",
+    "Open to everyone",
+    "One visit per week per family"
+  ],
+  "is_id_required": false,
+  "residency_req": null,
+  "special_notes": "Spanish spoken. Serves Hispanic community and all Gwinnett County residents.",
+  "confidence": 9,
+  "_meta": {
+    "source_url": "https://example.org/centro-comida",
+    "scraped_date": "2026-02-14",
+    "verified_by": "human",
+    "notes": "Bilingual Spanish/English page. All content duplicated in both languages. Tests multilingual extraction - should extract English fields correctly."
+  }
+}

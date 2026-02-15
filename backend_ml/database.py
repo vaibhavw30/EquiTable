@@ -2,10 +2,13 @@
 Database connection module for MongoDB Atlas
 """
 
+import logging
 import os
 import certifi
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
+
+logger = logging.getLogger("equitable")
 
 load_dotenv()
 
@@ -28,7 +31,7 @@ async def connect_to_mongo():
 
     # Verify connection by pinging the server
     await client.admin.command("ping")
-    print(f"Connected to MongoDB Atlas - Database: {DATABASE_NAME}")
+    logger.info("Connected to MongoDB Atlas", extra={"event": "db_connected", "database": DATABASE_NAME})
 
     # Create 2dsphere index on location field for geospatial queries
     await db["pantries"].create_index(
@@ -36,7 +39,7 @@ async def connect_to_mongo():
         name="location_2dsphere",
         sparse=True,
     )
-    print("Ensured 2dsphere index on pantries.location")
+    logger.info("Ensured 2dsphere index", extra={"event": "db_index_created", "collection": "pantries", "index": "location_2dsphere"})
 
 
 async def close_mongo_connection():
@@ -45,7 +48,7 @@ async def close_mongo_connection():
 
     if client:
         client.close()
-        print("Closed MongoDB connection")
+        logger.info("Closed MongoDB connection", extra={"event": "db_disconnected"})
 
 
 def get_database():

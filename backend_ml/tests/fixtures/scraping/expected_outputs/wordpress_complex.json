@@ -1,0 +1,19 @@
+{
+  "status": "OPEN",
+  "hours_notes": "Tue 10am-2pm, Thu 10am-2pm",
+  "hours_today": "10am-2pm",
+  "eligibility_rules": [
+    "No ID or documentation required",
+    "Open to all regardless of background, religion, or zip code"
+  ],
+  "is_id_required": false,
+  "residency_req": null,
+  "special_notes": null,
+  "confidence": 7,
+  "_meta": {
+    "source_url": "https://example.org/grace-fellowship",
+    "scraped_date": "2026-02-14",
+    "verified_by": "human",
+    "notes": "WordPress church site with lots of noise (events, ministries, sidebar widgets). Food pantry info buried in ministries section. Tests noise filtering."
+  }
+}

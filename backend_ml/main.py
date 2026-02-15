@@ -2,6 +2,7 @@
 EquiTable API - Food Rescue Agent Backend
 """
 
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -14,7 +15,11 @@ from pydantic import BaseModel
 from database import connect_to_mongo, close_mongo_connection, get_collection
 from models.pantry import Pantry, PantryStatus
 from services.scraper import get_scraper_service
+from services.extractor import ExtractorService
+from services.ingestion_pipeline import IngestionPipeline, IngestionError
 from services.llm import get_llm_service
+
+logger = logging.getLogger("equitable")
 
 
 @asynccontextmanager
@@ -23,9 +28,9 @@ async def lifespan(app: FastAPI):
     # Startup
     try:
         await connect_to_mongo()
-        print("Database connection established")
+        logger.info("Database connection established", extra={"event": "startup_complete"})
     except Exception as e:
-        print(f"Failed to connect to MongoDB: {e}")
+        logger.error("Failed to connect to MongoDB", extra={"event": "startup_failed", "error": str(e)})
         raise
 
     yield
@@ -131,9 +136,8 @@ async def ingest_pantry(pantry_id: str, request: IngestRequest):
     """
     Full ingestion pipeline for a single pantry:
     1. Validate pantry exists
-    2. Scrape the provided URL via Firecrawl
-    3. Extract structured data via Azure OpenAI
-    4. Merge extracted fields into the pantry document
+    2. Scrape → Extract → Validate via IngestionPipeline
+    3. Merge extracted fields into the pantry document
     """
     pantries_collection = get_collection("pantries")
 
@@ -147,19 +151,23 @@ async def ingest_pantry(pantry_id: str, request: IngestRequest):
     if not existing:
         raise HTTPException(status_code=404, detail="Pantry not found")
 
-    # 2. Scrape the URL
-    scraper = get_scraper_service()
-    raw_text = scraper.scrape_url(request.url)
-    if not raw_text:
-        raise HTTPException(status_code=502, detail=f"Failed to scrape {request.url}")
+    # 2. Run ingestion pipeline: scrape → extract → validate
+    try:
+        llm = get_llm_service()
+        pipeline = IngestionPipeline(
+            scraper=get_scraper_service(),
+            extractor=llm.extractor,
+        )
+        update_data = await pipeline.ingest(request.url)
+    except IngestionError as e:
+        logger.warning(
+            "Ingestion failed",
+            extra={"event": "ingestion_endpoint_failed", "stage": e.stage, "url": e.url, "error": e.reason},
+        )
+        status_code = 502 if e.stage in ("scrape", "extract") else 422
+        raise HTTPException(status_code=status_code, detail=str(e))
 
-    # 3. Extract structured data via LLM
-    llm = get_llm_service()
-    update_data = await llm.extract_data(raw_text)
-    if not update_data:
-        raise HTTPException(status_code=502, detail="LLM failed to extract structured data")
-
-    # 4. Merge into the document
+    # 3. Merge into the document
     update_fields = update_data.model_dump()
     update_fields["source_url"] = request.url
     update_fields["last_updated"] = datetime.now(timezone.utc)
