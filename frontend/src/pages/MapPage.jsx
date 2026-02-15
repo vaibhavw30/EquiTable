@@ -1,12 +1,10 @@
 import { useState, useCallback, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Search,
   X,
   Navigation,
-  Filter,
   ChevronLeft,
-  ChevronRight,
   Clock,
   Shield,
   MapPin,
@@ -20,7 +18,12 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { clsx } from 'clsx'
 
 import usePantries from '../hooks/usePantries'
+import useNearbyPantries from '../hooks/useNearbyPantries'
+import useCities from '../hooks/useCities'
 import PantryMapClean from '../components/PantryMapClean'
+import CitySelector from '../components/CitySelector'
+import CityDropdown from '../components/CityDropdown'
+import RadiusSlider, { milesToMeters, radiusToZoom } from '../components/RadiusSlider'
 
 // Filter chip component
 function FilterChip({ label, active, onClick }) {
@@ -232,7 +235,29 @@ function PantryDetailPanel({ pantry, onClose }) {
 
 // Main Map Page
 export default function MapPage() {
-  const { pantries, loading, error, refresh } = usePantries()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const cityParam = searchParams.get('city')
+  const stateParam = searchParams.get('state')
+
+  const [selectedCity, setSelectedCity] = useState(
+    cityParam ? { city: cityParam, state: stateParam } : null
+  )
+  const [showCitySelector, setShowCitySelector] = useState(!cityParam)
+  const [radiusMiles, setRadiusMiles] = useState(null) // null = off
+
+  const { cities, loading: citiesLoading } = useCities()
+
+  // Get map center from selected city
+  const mapCenter = useMemo(() => {
+    if (selectedCity) {
+      const cityData = cities.find(
+        (c) => c.city === selectedCity.city && c.state === selectedCity.state
+      )
+      if (cityData?.center) return cityData.center
+    }
+    return null
+  }, [selectedCity, cities])
+
   const [searchQuery, setSearchQuery] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [selectedPantry, setSelectedPantry] = useState(null)
@@ -245,7 +270,59 @@ export default function MapPage() {
     noIdOnly: false,
   })
 
-  // Smart filtering
+  // Effective center for radius: user location overrides city center
+  const effectiveCenter = useMemo(() => {
+    if (userLocation) return userLocation
+    if (mapCenter) return mapCenter
+    return null
+  }, [userLocation, mapCenter])
+
+  const radiusActive = radiusMiles != null && effectiveCenter != null
+
+  // City-based fetching (disabled when radius is active)
+  const {
+    pantries: cityPantries,
+    loading: cityLoading,
+    error: cityError,
+    refresh: cityRefresh,
+  } = usePantries(
+    selectedCity
+      ? { city: selectedCity.city, state: selectedCity.state, enabled: !radiusActive }
+      : { enabled: !radiusActive }
+  )
+
+  // Geo-based fetching (enabled when radius is active)
+  const {
+    pantries: nearbyPantries,
+    loading: nearbyLoading,
+    error: nearbyError,
+    refresh: nearbyRefresh,
+  } = useNearbyPantries({
+    lat: effectiveCenter?.lat,
+    lng: effectiveCenter?.lng,
+    maxDistance: radiusMiles ? milesToMeters(radiusMiles) : null,
+    enabled: radiusActive,
+  })
+
+  // Unified data source
+  const pantries = radiusActive ? nearbyPantries : cityPantries
+  const loading = radiusActive ? nearbyLoading : cityLoading
+  const error = radiusActive ? nearbyError : cityError
+  const refresh = radiusActive ? nearbyRefresh : cityRefresh
+
+  // Handle city selection (city can be null for "All Cities")
+  const handleCitySelect = useCallback((city) => {
+    setSelectedCity(city)
+    setShowCitySelector(false)
+    setSelectedPantry(null)
+    if (city) {
+      setSearchParams({ city: city.city, state: city.state })
+    } else {
+      setSearchParams({})
+    }
+  }, [setSearchParams])
+
+  // Smart filtering (client-side on top of server results)
   const filteredPantries = useMemo(() => {
     let result = pantries
 
@@ -272,7 +349,7 @@ export default function MapPage() {
     return result
   }, [pantries, searchQuery, filters])
 
-  // Geolocation
+  // Geolocation — auto-enable radius at 25mi when user geolocates
   const handleLocateUser = useCallback(() => {
     if (!navigator.geolocation) return
 
@@ -284,11 +361,16 @@ export default function MapPage() {
           lng: position.coords.longitude,
         })
         setLocating(false)
+        if (radiusMiles == null) setRadiusMiles(25)
       },
       () => setLocating(false),
       { enableHighAccuracy: true, timeout: 10000 }
     )
-  }, [])
+  }, [radiusMiles])
+
+  // Compute radius in meters for map circle
+  const radiusMeters = radiusActive ? milesToMeters(radiusMiles) : null
+  const radiusZoom = radiusActive ? radiusToZoom(radiusMiles) : null
 
   const handlePantrySelect = (pantry) => {
     setSelectedPantry(pantry)
@@ -321,6 +403,32 @@ export default function MapPage() {
                 >
                   <ChevronLeft className="w-4 h-4 text-zinc-500" />
                 </button>
+              </div>
+
+              {/* City dropdown */}
+              <div className="mb-3">
+                <CityDropdown
+                  cities={cities}
+                  selectedCity={selectedCity}
+                  onSelect={handleCitySelect}
+                  loading={citiesLoading}
+                />
+              </div>
+
+              {/* Radius slider */}
+              <div className="mb-3">
+                <RadiusSlider
+                  value={radiusMiles}
+                  onChange={setRadiusMiles}
+                  centerLabel={
+                    userLocation
+                      ? 'your location'
+                      : selectedCity
+                        ? selectedCity.city
+                        : null
+                  }
+                  disabled={!effectiveCenter}
+                />
               </div>
 
               {/* Search */}
@@ -360,7 +468,9 @@ export default function MapPage() {
 
             {/* Results count */}
             <div className="px-4 py-2 text-xs text-zinc-500 bg-zinc-50 border-b border-zinc-100">
-              {filteredPantries.length} of {pantries.length} pantries
+              {radiusActive
+                ? `${filteredPantries.length} pantries within ${radiusMiles} mi`
+                : `${filteredPantries.length} of ${pantries.length} pantries`}
             </div>
 
             {/* Pantry list */}
@@ -460,6 +570,10 @@ export default function MapPage() {
           userLocation={userLocation}
           selectedPantry={selectedPantry}
           onPantrySelect={handlePantrySelect}
+          center={radiusActive ? effectiveCenter : mapCenter}
+          radiusCenter={radiusActive ? effectiveCenter : null}
+          radiusMeters={radiusMeters}
+          zoom={radiusZoom}
           className="w-full h-full"
         />
 
@@ -469,6 +583,18 @@ export default function MapPage() {
             <PantryDetailPanel
               pantry={selectedPantry}
               onClose={() => setSelectedPantry(null)}
+            />
+          )}
+        </AnimatePresence>
+
+        {/* City selector overlay */}
+        <AnimatePresence>
+          {showCitySelector && (
+            <CitySelector
+              cities={cities}
+              loading={citiesLoading}
+              onSelect={handleCitySelect}
+              onClose={selectedCity ? () => setShowCitySelector(false) : null}
             />
           )}
         </AnimatePresence>

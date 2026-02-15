@@ -98,6 +98,16 @@ class Pantry(BaseModel):
         description="1-10 score of how clear the extracted info was"
     )
 
+    # === Location metadata ===
+    city: Optional[str] = Field(
+        default=None,
+        description="City name, e.g. 'Atlanta', 'New York City'"
+    )
+    state: Optional[str] = Field(
+        default=None,
+        description="State abbreviation, e.g. 'GA', 'NY'"
+    )
+
     # === Metadata ===
     source_url: Optional[str] = Field(
         default=None,
@@ -151,6 +161,8 @@ class PantryCreate(BaseModel):
     residency_req: Optional[str] = None
     special_notes: Optional[str] = None
     confidence: Optional[int] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
     source_url: Optional[str] = None
     last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

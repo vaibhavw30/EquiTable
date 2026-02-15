@@ -1,0 +1,418 @@
+{
+  "cities": [
+    {
+      "city": "Atlanta",
+      "state": "GA",
+      "tier": 1,
+      "center": { "lat": 33.749, "lng": -84.388 },
+      "pantries": [
+        {
+          "name": "Midtown Assistance Center",
+          "url": "https://midtownassistancecenter.org",
+          "address": "30 Porter Pl NE, Atlanta, GA 30308",
+          "lat": 33.7784,
+          "lng": -84.3785
+        },
+        {
+          "name": "Venable Food Market (First Presbyterian Church)",
+          "url": "https://firstpresatl.org/community-ministries",
+          "address": "1328 Peachtree St NE, Atlanta, GA 30309",
+          "lat": 33.7878,
+          "lng": -84.3833
+        },
+        {
+          "name": "Lutheran Community Food Ministry (Church of the Redeemer)",
+          "url": "https://redeemer.org",
+          "address": "731 Peachtree St NE, Atlanta, GA 30308",
+          "lat": 33.7726,
+          "lng": -84.3843
+        },
+        {
+          "name": "Grace House Community Fridge",
+          "url": "https://gracepeople.org",
+          "address": "800 Monroe Dr NE, Atlanta, GA 30308",
+          "lat": 33.7818,
+          "lng": -84.3650
+        },
+        {
+          "name": "Klemis Kitchen (Georgia Tech)",
+          "url": "https://star.studentlife.gatech.edu/klemis-kitchen",
+          "address": "353 Ferst Dr NW, Atlanta, GA 30332",
+          "lat": 33.7756,
+          "lng": -84.3963
+        },
+        {
+          "name": "Atlanta Mission (My Sister's House)",
+          "url": "https://atlantamission.org/my-sisters-house",
+          "address": "921 Howell Mill Rd NW, Atlanta, GA 30318",
+          "lat": 33.7814,
+          "lng": -84.4103
+        },
+        {
+          "name": "Catholic Shrine of the Immaculate Conception (St. Francis Table)",
+          "url": "https://catholicshrineatlanta.org",
+          "address": "48 Martin Luther King Jr Dr SW, Atlanta, GA 30303",
+          "lat": 33.7537,
+          "lng": -84.3907
+        },
+        {
+          "name": "St. Luke's Episcopal Church (Community Ministries)",
+          "url": "https://stlukesatlanta.org",
+          "address": "435 Peachtree St NE, Atlanta, GA 30308",
+          "lat": 33.7642,
+          "lng": -84.3862
+        },
+        {
+          "name": "The Action Mission Ministry (Wheat Street Baptist Church)",
+          "url": "https://wearewheatstreet.org",
+          "address": "359 Auburn Ave NE, Atlanta, GA 30312",
+          "lat": 33.7561,
+          "lng": -84.3766
+        },
+        {
+          "name": "Ebenezer Baptist Church Food Pantry",
+          "url": "https://ebenezeratl.org",
+          "address": "407 Auburn Ave NE, Atlanta, GA 30312",
+          "lat": 33.7548,
+          "lng": -84.3725
+        },
+        {
+          "name": "Big Bethel AME Church",
+          "url": "https://ampleharvest.org/bethel-ame",
+          "address": "220 Auburn Ave NE, Atlanta, GA 30303",
+          "lat": 33.7555,
+          "lng": -84.3803
+        },
+        {
+          "name": "Salvation Army Red Shield Services",
+          "url": "https://salvationarmygeorgia.org/atlanta",
+          "address": "100 Edgewood Ave NE, Atlanta, GA 30303",
+          "lat": 33.7553,
+          "lng": -84.3808
+        },
+        {
+          "name": "Foundation of Miracles",
+          "url": "https://foundationofmiracles.org",
+          "address": "Atlanta, GA 30312",
+          "lat": 33.7450,
+          "lng": -84.3700
+        },
+        {
+          "name": "Intown Collaborative Ministries",
+          "url": "https://intowncm.org",
+          "address": "1017 Edgewood Ave NE, Atlanta, GA 30307",
+          "lat": 33.7543,
+          "lng": -84.3540
+        },
+        {
+          "name": "Loaves & Fishes (St. John the Wonderworker)",
+          "url": "https://saintjohnwonderworker.org",
+          "address": "541 Atlanta Ave SE, Atlanta, GA 30315",
+          "lat": 33.7290,
+          "lng": -84.3750
+        }
+      ]
+    },
+    {
+      "city": "New York City",
+      "state": "NY",
+      "tier": 1,
+      "center": { "lat": 40.7128, "lng": -74.006 },
+      "pantries": [
+        {
+          "name": "City Harvest",
+          "url": "https://www.cityharvest.org/",
+          "address": "6 East 32nd Street, New York, NY 10016",
+          "lat": 40.7468,
+          "lng": -73.9837
+        },
+        {
+          "name": "Food Bank For New York City",
+          "url": "https://www.foodbanknyc.org/",
+          "address": "39 Broadway, 10th Floor, New York, NY 10006",
+          "lat": 40.7065,
+          "lng": -74.0131
+        },
+        {
+          "name": "Holy Apostles Soup Kitchen",
+          "url": "https://holyapostlessoupkitchen.org/",
+          "address": "296 9th Ave, New York, NY 10001",
+          "lat": 40.7472,
+          "lng": -74.0008
+        },
+        {
+          "name": "Bowery Mission",
+          "url": "https://www.bowery.org/",
+          "address": "227 Bowery, New York, NY 10002",
+          "lat": 40.7224,
+          "lng": -73.9927
+        },
+        {
+          "name": "West Side Campaign Against Hunger",
+          "url": "https://www.wscah.org/",
+          "address": "263 West 86th Street, New York, NY 10024",
+          "lat": 40.7887,
+          "lng": -73.9741
+        }
+      ]
+    },
+    {
+      "city": "Los Angeles",
+      "state": "CA",
+      "tier": 1,
+      "center": { "lat": 34.0522, "lng": -118.2437 },
+      "pantries": [
+        {
+          "name": "Los Angeles Regional Food Bank",
+          "url": "https://www.lafoodbank.org/",
+          "address": "1734 E 41st St, Los Angeles, CA 90058",
+          "lat": 33.9984,
+          "lng": -118.2116
+        },
+        {
+          "name": "Midnight Mission",
+          "url": "https://www.midnightmission.org/",
+          "address": "601 S San Pedro St, Los Angeles, CA 90014",
+          "lat": 34.0422,
+          "lng": -118.2467
+        },
+        {
+          "name": "St. Francis Center",
+          "url": "https://www.sfcla.org/",
+          "address": "1835 S Hope St, Los Angeles, CA 90015",
+          "lat": 34.0355,
+          "lng": -118.2661
+        },
+        {
+          "name": "MEND (Meet Each Need with Dignity)",
+          "url": "https://mendpoverty.org/",
+          "address": "10641 N San Fernando Rd, Pacoima, CA 91331",
+          "lat": 34.2590,
+          "lng": -118.4082
+        },
+        {
+          "name": "Downtown Women's Center",
+          "url": "https://downtownwomenscenter.org/",
+          "address": "442 S San Pedro St, Los Angeles, CA 90013",
+          "lat": 34.0445,
+          "lng": -118.2440
+        }
+      ]
+    },
+    {
+      "city": "Chicago",
+      "state": "IL",
+      "tier": 1,
+      "center": { "lat": 41.8781, "lng": -87.6298 },
+      "pantries": [
+        {
+          "name": "Greater Chicago Food Depository",
+          "url": "https://www.chicagosfoodbank.org/",
+          "address": "4100 W Ann Lurie Pl, Chicago, IL 60632",
+          "lat": 41.8136,
+          "lng": -87.7266
+        },
+        {
+          "name": "Lakeview Pantry",
+          "url": "https://www.lakeviewpantry.org/",
+          "address": "3831 N Broadway, Chicago, IL 60613",
+          "lat": 41.9507,
+          "lng": -87.6459
+        },
+        {
+          "name": "Pacific Garden Mission",
+          "url": "https://www.pgm.org/",
+          "address": "1458 S Canal St, Chicago, IL 60607",
+          "lat": 41.8627,
+          "lng": -87.6398
+        },
+        {
+          "name": "Common Pantry",
+          "url": "https://www.commonpantry.org/",
+          "address": "3744 N Damen Ave, Chicago, IL 60618",
+          "lat": 41.9497,
+          "lng": -87.6789
+        },
+        {
+          "name": "Lincoln Park Community Services",
+          "url": "https://www.lpcschicago.org/",
+          "address": "600 W Fullerton Pkwy, Chicago, IL 60614",
+          "lat": 41.9256,
+          "lng": -87.6442
+        }
+      ]
+    },
+    {
+      "city": "Houston",
+      "state": "TX",
+      "tier": 1,
+      "center": { "lat": 29.7604, "lng": -95.3698 },
+      "pantries": [
+        {
+          "name": "Houston Food Bank",
+          "url": "https://www.houstonfoodbank.org/",
+          "address": "535 Portwall St, Houston, TX 77029",
+          "lat": 29.7408,
+          "lng": -95.2890
+        },
+        {
+          "name": "Star of Hope Mission",
+          "url": "https://www.sohmission.org/",
+          "address": "1811 Ruiz St, Houston, TX 77002",
+          "lat": 29.7599,
+          "lng": -95.3747
+        },
+        {
+          "name": "Northwest Assistance Ministries",
+          "url": "https://www.namonline.org/",
+          "address": "15555 Kuykendahl Rd, Houston, TX 77090",
+          "lat": 30.0032,
+          "lng": -95.4654
+        },
+        {
+          "name": "East Spring Branch Food Pantry",
+          "url": "https://esbfoodpantry.org/",
+          "address": "1815 Campbell Rd, Houston, TX 77080",
+          "lat": 29.7959,
+          "lng": -95.5179
+        },
+        {
+          "name": "Salvation Army Greater Houston",
+          "url": "https://www.salvationarmyhouston.org/",
+          "address": "1500 Austin St, Houston, TX 77002",
+          "lat": 29.7531,
+          "lng": -95.3596
+        }
+      ]
+    },
+    {
+      "city": "Oakland",
+      "state": "CA",
+      "tier": 2,
+      "center": { "lat": 37.8044, "lng": -122.2712 },
+      "pantries": [
+        {
+          "name": "Alameda County Community Food Bank",
+          "url": "https://www.accfb.org/",
+          "address": "7900 Edgewater Dr, Oakland, CA 94621",
+          "lat": 37.7357,
+          "lng": -122.1977
+        },
+        {
+          "name": "World Ground Cafe & Community Fridge",
+          "url": "https://www.worldgroundcafe.org/",
+          "address": "3726 MacArthur Blvd, Oakland, CA 94619",
+          "lat": 37.7879,
+          "lng": -122.2074
+        },
+        {
+          "name": "St. Vincent de Paul of Alameda County",
+          "url": "https://www.svdp-alameda.org/",
+          "address": "2272 San Pablo Ave, Oakland, CA 94612",
+          "lat": 37.8134,
+          "lng": -122.2797
+        },
+        {
+          "name": "Mercy Brown Bag Program",
+          "url": "https://www.mercybba.org/",
+          "address": "515 22nd St, Oakland, CA 94612",
+          "lat": 37.8100,
+          "lng": -122.2631
+        },
+        {
+          "name": "Open Door Mission & Pantry",
+          "url": "https://www.opendoormission.net/",
+          "address": "PO Box 11270, Oakland, CA 94611",
+          "lat": 37.8271,
+          "lng": -122.2527
+        }
+      ]
+    },
+    {
+      "city": "San Francisco",
+      "state": "CA",
+      "tier": 2,
+      "center": { "lat": 37.7749, "lng": -122.4194 },
+      "pantries": [
+        {
+          "name": "SF-Marin Food Bank",
+          "url": "https://www.sfmfoodbank.org/",
+          "address": "900 Pennsylvania Ave, San Francisco, CA 94107",
+          "lat": 37.7534,
+          "lng": -122.3936
+        },
+        {
+          "name": "Glide Memorial Church",
+          "url": "https://www.glide.org/",
+          "address": "330 Ellis St, San Francisco, CA 94102",
+          "lat": 37.7853,
+          "lng": -122.4128
+        },
+        {
+          "name": "St. Anthony's Dining Room",
+          "url": "https://www.stanthonysf.org/",
+          "address": "150 Golden Gate Ave, San Francisco, CA 94102",
+          "lat": 37.7818,
+          "lng": -122.4134
+        },
+        {
+          "name": "Bayview Hunters Point Community Pantry",
+          "url": "https://www.sfcommunityhealth.org/",
+          "address": "4100 3rd St, San Francisco, CA 94124",
+          "lat": 37.7378,
+          "lng": -122.3901
+        },
+        {
+          "name": "Project Open Hand",
+          "url": "https://www.openhand.org/",
+          "address": "730 Polk St, San Francisco, CA 94109",
+          "lat": 37.7847,
+          "lng": -122.4193
+        }
+      ]
+    },
+    {
+      "city": "San Diego",
+      "state": "CA",
+      "tier": 2,
+      "center": { "lat": 32.7157, "lng": -117.1611 },
+      "pantries": [
+        {
+          "name": "San Diego Food Bank",
+          "url": "https://www.sandiegofoodbank.org/",
+          "address": "9850 Distribution Ave, San Diego, CA 92121",
+          "lat": 32.8801,
+          "lng": -117.2037
+        },
+        {
+          "name": "Feeding San Diego",
+          "url": "https://feedingsandiego.org/",
+          "address": "9455 Waples St Suite 100, San Diego, CA 92121",
+          "lat": 32.8804,
+          "lng": -117.2101
+        },
+        {
+          "name": "Father Joe's Villages",
+          "url": "https://www.my.neighbor.org/",
+          "address": "3350 E St, San Diego, CA 92102",
+          "lat": 32.7152,
+          "lng": -117.1397
+        },
+        {
+          "name": "Jacobs & Cushman San Diego Food Bank",
+          "url": "https://www.sandiegofoodbank.org/get-help/",
+          "address": "9850 Distribution Ave, San Diego, CA 92121",
+          "lat": 32.8801,
+          "lng": -117.2037
+        },
+        {
+          "name": "Salvation Army Door of Hope",
+          "url": "https://sandiego.salvationarmy.org/",
+          "address": "825 7th Ave, San Diego, CA 92101",
+          "lat": 32.7142,
+          "lng": -117.1586
+        }
+      ]
+    }
+  ]
+}

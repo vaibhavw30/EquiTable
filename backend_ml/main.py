@@ -72,6 +72,24 @@ async def test_connection():
 class IngestRequest(BaseModel):
     """Request body for the ingest endpoint."""
     url: str
+    city: Optional[str] = None
+    state: Optional[str] = None
+
+
+# Static city center coordinates for the /cities endpoint
+CITY_CENTERS = {
+    ("Atlanta", "GA"): {"lat": 33.749, "lng": -84.388},
+    ("New York City", "NY"): {"lat": 40.7128, "lng": -74.006},
+    ("Los Angeles", "CA"): {"lat": 34.0522, "lng": -118.2437},
+    ("Chicago", "IL"): {"lat": 41.8781, "lng": -87.6298},
+    ("Houston", "TX"): {"lat": 29.7604, "lng": -95.3698},
+    ("Oakland", "CA"): {"lat": 37.8044, "lng": -122.2712},
+    ("San Francisco", "CA"): {"lat": 37.7749, "lng": -122.4194},
+    ("San Diego", "CA"): {"lat": 32.7157, "lng": -117.1611},
+}
+
+
+MAX_NEARBY_DISTANCE = 5_000_000  # ~3100 miles server-side cap
 
 
 @app.get("/pantries/nearby", response_model=list[Pantry])
@@ -79,6 +97,7 @@ async def get_nearby_pantries(
     lat: float = Query(..., description="Latitude"),
     lng: float = Query(..., description="Longitude"),
     max_distance: int = Query(16093, description="Max distance in meters (default ~10 miles)"),
+    limit: int = Query(200, ge=1, le=500, description="Max results to return"),
     status: Optional[PantryStatus] = Query(None, description="Filter by operational status"),
 ):
     """
@@ -87,6 +106,7 @@ async def get_nearby_pantries(
     """
     try:
         pantries_collection = get_collection("pantries")
+        max_distance = min(max_distance, MAX_NEARBY_DISTANCE)
 
         query = {
             "location": {
@@ -104,7 +124,7 @@ async def get_nearby_pantries(
             query["status"] = status.value
 
         pantries = []
-        async for document in pantries_collection.find(query):
+        async for document in pantries_collection.find(query).limit(limit):
             pantries.append(Pantry(**document))
 
         return pantries
@@ -113,20 +133,61 @@ async def get_nearby_pantries(
 
 
 @app.get("/pantries", response_model=list[Pantry])
-async def get_pantries():
+async def get_pantries(
+    city: Optional[str] = Query(None, description="Filter by city name (case-insensitive)"),
+    state: Optional[str] = Query(None, description="Filter by state abbreviation (case-insensitive)"),
+):
     """
-    Retrieve all pantries from the database.
-    Returns a list of Pantry objects with _id serialized as string.
+    Retrieve pantries from the database, optionally filtered by city/state.
+    No params returns all pantries (backward-compatible).
     """
     try:
         pantries_collection = get_collection("pantries")
-        pantries = []
+        query = {}
 
-        cursor = pantries_collection.find({})
+        if city:
+            query["city"] = {"$regex": f"^{city}$", "$options": "i"}
+        if state:
+            query["state"] = {"$regex": f"^{state}$", "$options": "i"}
+
+        pantries = []
+        cursor = pantries_collection.find(query)
         async for document in cursor:
             pantries.append(Pantry(**document))
 
         return pantries
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@app.get("/cities")
+async def get_cities():
+    """
+    Returns a list of cities with pantry counts and map center coordinates.
+    Uses MongoDB aggregation to group by city/state.
+    """
+    try:
+        pantries_collection = get_collection("pantries")
+
+        pipeline = [
+            {"$match": {"city": {"$ne": None}}},
+            {"$group": {"_id": {"city": "$city", "state": "$state"}, "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+        ]
+
+        cities = []
+        async for doc in pantries_collection.aggregate(pipeline):
+            city = doc["_id"]["city"]
+            state = doc["_id"]["state"]
+            center = CITY_CENTERS.get((city, state), {"lat": 0, "lng": 0})
+            cities.append({
+                "city": city,
+                "state": state,
+                "count": doc["count"],
+                "center": center,
+            })
+
+        return cities
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
@@ -171,6 +232,10 @@ async def ingest_pantry(pantry_id: str, request: IngestRequest):
     update_fields = update_data.model_dump()
     update_fields["source_url"] = request.url
     update_fields["last_updated"] = datetime.now(timezone.utc)
+    if request.city:
+        update_fields["city"] = request.city
+    if request.state:
+        update_fields["state"] = request.state
 
     await pantries_collection.update_one(
         {"_id": oid},

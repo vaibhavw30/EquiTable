@@ -15,6 +15,8 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 
+import useCities from '../hooks/useCities'
+
 // Animated background grid
 function GridBackground() {
   return (
@@ -46,18 +48,18 @@ function GridBackground() {
 function TerminalFeed() {
   const [lines, setLines] = useState([
     { text: '> Initializing autonomous agents...', type: 'system' },
-    { text: '> Connected to Atlanta food network', type: 'success' },
-    { text: '> Scanning 15 active nodes...', type: 'system' },
+    { text: '> Connected to multi-city food network', type: 'success' },
+    { text: '> Scanning active nodes across 5 cities...', type: 'system' },
   ])
 
   useEffect(() => {
     const messages = [
-      { text: '> Midtown Assistance Center: ONLINE', type: 'success' },
+      { text: '> [Atlanta] Midtown Assistance Center: ONLINE', type: 'success' },
+      { text: '> [NYC] City Harvest: Status updated', type: 'success' },
+      { text: '> [Chicago] Lakeview Pantry: ONLINE', type: 'success' },
       { text: '> Geospatial index optimized', type: 'system' },
-      { text: '> Data sync complete', type: 'success' },
-      { text: '> Monitoring food infrastructure...', type: 'system' },
-      { text: '> St. Francis Table: 47 meals served', type: 'data' },
-      { text: '> Atlanta Mission: Status updated', type: 'success' },
+      { text: '> [Houston] Food Bank: 200 families served', type: 'data' },
+      { text: '> [LA] Regional Food Bank: Status updated', type: 'success' },
       { text: '> Running integrity checks...', type: 'system' },
     ]
 
@@ -189,8 +191,8 @@ function MissionSection() {
           transition={{ delay: 0.2 }}
           className="mt-12 text-lg text-zinc-500 max-w-2xl mx-auto leading-relaxed"
         >
-          Atlanta has enough food to feed everyone, but the data is dark, disconnected, and decaying.
-          EquiTable is the intelligence layer that bridges the gap.
+          America's cities have enough food to feed everyone, but the data is dark, disconnected, and decaying.
+          EquiTable is the intelligence layer that bridges the gap — now live in Atlanta, NYC, LA, Chicago, and Houston.
         </motion.p>
       </div>
     </motion.section>
@@ -203,7 +205,7 @@ function HowItWorksSection() {
     {
       icon: Radio,
       title: 'SCRAPE',
-      description: 'Autonomous agents continuously scan food pantry websites across Atlanta, extracting real-time information.',
+      description: 'Autonomous agents continuously scan food pantry websites across major US cities, extracting real-time information.',
     },
     {
       icon: Brain,
@@ -263,10 +265,13 @@ function HowItWorksSection() {
 }
 
 // Stats section
-function StatsSection() {
+function StatsSection({ cities }) {
+  const totalPantries = cities.reduce((sum, c) => sum + c.count, 0)
+  const cityCount = cities.length
+
   const stats = [
-    { value: '15', label: 'Active Pantries' },
-    { value: '24/7', label: 'Monitoring' },
+    { value: totalPantries > 0 ? String(totalPantries) : '35+', label: 'Active Pantries' },
+    { value: cityCount > 0 ? String(cityCount) : '5', label: 'Cities' },
     { value: '5km', label: 'Radius Search' },
     { value: 'Real-time', label: 'Updates' },
   ]
@@ -344,7 +349,7 @@ function FinalCTASection() {
           </h2>
 
           <p className="text-lg text-zinc-500 mb-12 max-w-xl mx-auto">
-            Join us in transforming Atlanta's food security infrastructure with intelligent, autonomous systems.
+            Join us in transforming food security infrastructure across America's cities with intelligent, autonomous systems.
           </p>
 
           <Link
@@ -372,7 +377,7 @@ function Footer() {
           <span className="text-zinc-600 text-sm">v1.0</span>
         </div>
         <p className="text-sm text-zinc-600">
-          AI-Powered Food Rescue Agent for Atlanta
+          AI-Powered Food Rescue Agent
         </p>
       </div>
     </footer>
@@ -381,13 +386,15 @@ function Footer() {
 
 // Main Landing Page
 export default function LandingPage() {
+  const { cities } = useCities()
+
   return (
     <div className="min-h-screen bg-zinc-950 text-white overflow-x-hidden">
       <GridBackground />
       <HeroSection />
       <MissionSection />
       <HowItWorksSection />
-      <StatsSection />
+      <StatsSection cities={cities} />
       <TerminalSection />
       <FinalCTASection />
       <Footer />

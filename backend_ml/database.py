@@ -41,6 +41,22 @@ async def connect_to_mongo():
     )
     logger.info("Ensured 2dsphere index", extra={"event": "db_index_created", "collection": "pantries", "index": "location_2dsphere"})
 
+    # Compound index for city/state filtering
+    await db["pantries"].create_index(
+        [("city", 1), ("state", 1)],
+        name="city_state",
+    )
+    logger.info("Ensured city_state index", extra={"event": "db_index_created", "collection": "pantries", "index": "city_state"})
+
+    # Unique sparse index on source_url for upsert logic
+    await db["pantries"].create_index(
+        [("source_url", 1)],
+        name="source_url_unique",
+        unique=True,
+        sparse=True,
+    )
+    logger.info("Ensured source_url unique index", extra={"event": "db_index_created", "collection": "pantries", "index": "source_url_unique"})
+
 
 async def close_mongo_connection():
     """Close database connection on shutdown"""

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import {
   APIProvider,
   Map,
@@ -69,7 +69,7 @@ const CLEAN_MAP_STYLE = [
 ]
 
 /**
- * 4-color pin logic (same as before):
+ * 4-color pin logic:
  * - CLOSED → Red
  * - UNKNOWN or WAITLIST → Gray
  * - OPEN + ID required → Amber
@@ -88,8 +88,51 @@ function markerColors(pantry) {
   return { background: '#22C55E', glyphColor: '#fff', borderColor: '#16A34A' }
 }
 
+// Radius circle overlay using raw google.maps.Circle
+function RadiusCircle({ center, radius }) {
+  const map = useMap()
+  const circleRef = useRef(null)
+
+  useEffect(() => {
+    if (!map || !center || !radius) {
+      if (circleRef.current) {
+        circleRef.current.setMap(null)
+        circleRef.current = null
+      }
+      return
+    }
+
+    if (!circleRef.current) {
+      circleRef.current = new google.maps.Circle({
+        map,
+        center,
+        radius,
+        fillColor: '#10B981',
+        fillOpacity: 0.06,
+        strokeColor: '#10B981',
+        strokeOpacity: 0.3,
+        strokeWeight: 1.5,
+        clickable: false,
+      })
+    } else {
+      circleRef.current.setCenter(center)
+      circleRef.current.setRadius(radius)
+      circleRef.current.setMap(map)
+    }
+
+    return () => {
+      if (circleRef.current) {
+        circleRef.current.setMap(null)
+        circleRef.current = null
+      }
+    }
+  }, [map, center, radius])
+
+  return null
+}
+
 // Inner component to access map instance
-function MapContent({ pantries, userLocation, selectedPantry, onPantrySelect }) {
+function MapContent({ pantries, userLocation, selectedPantry, onPantrySelect, center, zoom, radiusCenter, radiusMeters }) {
   const map = useMap()
   const [infoWindowPantry, setInfoWindowPantry] = useState(null)
 
@@ -98,11 +141,19 @@ function MapContent({ pantries, userLocation, selectedPantry, onPantrySelect }) 
     onPantrySelect?.(pantry)
   }, [onPantrySelect])
 
+  // Pan to center and optionally set zoom
+  useEffect(() => {
+    if (center && map) {
+      map.panTo(center)
+      map.setZoom(zoom || DEFAULT_ZOOM)
+    }
+  }, [center, zoom, map])
+
   // Pan to user location when it changes
   useEffect(() => {
     if (userLocation && map) {
       map.panTo(userLocation)
-      map.setZoom(14)
+      if (!zoom) map.setZoom(14)
     }
   }, [userLocation, map])
 
@@ -115,6 +166,9 @@ function MapContent({ pantries, userLocation, selectedPantry, onPantrySelect }) 
 
   return (
     <>
+      {/* Radius circle overlay */}
+      <RadiusCircle center={radiusCenter} radius={radiusMeters} />
+
       {/* Pantry markers */}
       {pantries.map((pantry) => {
         const colors = markerColors(pantry)
@@ -184,13 +238,19 @@ export default function PantryMapClean({
   userLocation,
   selectedPantry,
   onPantrySelect,
+  center,
+  radiusCenter,
+  radiusMeters,
+  zoom,
   className,
 }) {
+  const mapCenter = center || DEFAULT_CENTER
+
   return (
     <div className={clsx('bg-zinc-100', className)}>
       <APIProvider apiKey={MAPS_KEY}>
         <Map
-          defaultCenter={DEFAULT_CENTER}
+          defaultCenter={mapCenter}
           defaultZoom={DEFAULT_ZOOM}
           mapId="equitable-clean-map"
           gestureHandling="greedy"
@@ -203,6 +263,10 @@ export default function PantryMapClean({
             userLocation={userLocation}
             selectedPantry={selectedPantry}
             onPantrySelect={onPantrySelect}
+            center={mapCenter}
+            zoom={zoom}
+            radiusCenter={radiusCenter}
+            radiusMeters={radiusMeters}
           />
         </Map>
       </APIProvider>

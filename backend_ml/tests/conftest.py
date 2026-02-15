@@ -37,6 +37,18 @@ async def test_db():
         name="location_2dsphere",
         sparse=True,
     )
+    # City/state compound index
+    await db["pantries"].create_index(
+        [("city", 1), ("state", 1)],
+        name="city_state",
+    )
+    # Unique sparse index on source_url
+    await db["pantries"].create_index(
+        [("source_url", 1)],
+        name="source_url_unique",
+        unique=True,
+        sparse=True,
+    )
 
     yield db
 
@@ -86,6 +98,8 @@ def sample_pantry():
         "residency_req": None,
         "special_notes": None,
         "confidence": 8,
+        "city": "Atlanta",
+        "state": "GA",
         "source_url": "https://example.com/pantry",
         "last_updated": "2025-01-01T00:00:00Z",
     }
