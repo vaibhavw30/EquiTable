@@ -54,8 +54,8 @@ export default function CityDropdown({ cities, selectedCity, onSelect, loading }
               <button
                 onClick={() => { onSelect(null); setOpen(false) }}
                 className={clsx(
-                  'w-full text-left px-3 py-2.5 text-sm hover:bg-zinc-50 transition-colors border-b border-zinc-100',
-                  !selectedCity && 'bg-emerald-50 text-emerald-700 font-medium'
+                  'w-full text-left px-3 py-2.5 text-sm text-zinc-700 hover:bg-zinc-50 transition-colors border-b border-zinc-100',
+                  !selectedCity && 'bg-emerald-50 !text-emerald-700 font-medium'
                 )}
               >
                 All Cities
@@ -71,8 +71,8 @@ export default function CityDropdown({ cities, selectedCity, onSelect, loading }
                     key={`${city.city}-${city.state}`}
                     onClick={() => { onSelect(city); setOpen(false) }}
                     className={clsx(
-                      'w-full text-left px-3 py-2.5 text-sm hover:bg-zinc-50 transition-colors',
-                      isActive && 'bg-emerald-50 text-emerald-700 font-medium'
+                      'w-full text-left px-3 py-2.5 text-sm text-zinc-700 hover:bg-zinc-50 transition-colors',
+                      isActive && 'bg-emerald-50 !text-emerald-700 font-medium'
                     )}
                   >
                     <span className="flex items-center justify-between">

@@ -4,6 +4,10 @@ TODAY IS: {current_date}
 
 You will receive raw Markdown scraped from a food pantry or church website. Your job is to extract REAL, SPECIFIC information about their food assistance programs.
 
+You may receive content from MULTIPLE pages of the same website, separated by
+"---" headers showing the source URL. Combine information from all pages.
+Prefer the page most specifically about food programs if info conflicts.
+
 HOURS:
 - Look for days and times (e.g. "Tuesday 1-6pm", "Mon-Fri 8:30am-4pm").
 - For hours_notes, include the FULL weekly schedule, not just one day.
