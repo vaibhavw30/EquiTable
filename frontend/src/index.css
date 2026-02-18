@@ -66,6 +66,48 @@ body {
   }
 }
 
+/* Discovery radar pulse animation */
+@keyframes radar-ping {
+  0% {
+    transform: scale(0.3);
+    opacity: 0.8;
+  }
+  80% {
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+
+/* Marker pop-in animation */
+@keyframes marker-pop {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-marker-pop {
+  animation: marker-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-marker-pop {
+    animation: none;
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 /* Google Maps InfoWindow custom styling */
 .gm-style-iw-c {
   padding: 0 !important;

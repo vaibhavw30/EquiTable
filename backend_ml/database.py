@@ -57,6 +57,14 @@ async def connect_to_mongo():
     )
     logger.info("Ensured source_url unique index", extra={"event": "db_index_created", "collection": "pantries", "index": "source_url_unique"})
 
+    # TTL index on discovery_cache — auto-expire after 7 days
+    await db["discovery_cache"].create_index(
+        [("created_at", 1)],
+        name="discovery_cache_ttl",
+        expireAfterSeconds=7 * 24 * 3600,
+    )
+    logger.info("Ensured discovery_cache TTL index", extra={"event": "db_index_created", "collection": "discovery_cache", "index": "discovery_cache_ttl"})
+
 
 async def close_mongo_connection():
     """Close database connection on shutdown"""

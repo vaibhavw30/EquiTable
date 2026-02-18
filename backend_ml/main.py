@@ -2,22 +2,28 @@
 EquiTable API - Food Rescue Agent Backend
 """
 
+import json
 import logging
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
 from bson import ObjectId
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
 
 from database import connect_to_mongo, close_mongo_connection, get_collection
+from models.discovery import DiscoveryRequest, DiscoveryResponse, DiscoveryStatus
 from models.pantry import Pantry, PantryStatus
-from services.scraper import get_scraper_service
-from services.extractor import ExtractorService
+from services.discovery_service import DiscoveryService, clear_job_state
 from services.ingestion_pipeline import IngestionPipeline, IngestionError
 from services.llm import get_llm_service
+from services.places_client import PlacesClient, PlacesAPIError
+from services.scraper import get_scraper_service
 
 logger = logging.getLogger("equitable")
 
@@ -55,6 +61,46 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Rate Limiter (in-memory, per-IP) ─────────────────────────────────────────
+
+DISCOVERY_RATE_LIMIT = 10      # max jobs per IP per window
+DISCOVERY_RATE_WINDOW = 3600   # window in seconds (1 hour)
+
+# { ip: [timestamp, timestamp, ...] }
+_discovery_rate: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_rate_limit(client_ip: str) -> bool:
+    """Return True if the client is within rate limits."""
+    now = time.time()
+    window_start = now - DISCOVERY_RATE_WINDOW
+
+    # Prune old entries
+    _discovery_rate[client_ip] = [
+        t for t in _discovery_rate[client_ip] if t > window_start
+    ]
+
+    return len(_discovery_rate[client_ip]) < DISCOVERY_RATE_LIMIT
+
+
+def _record_rate_limit(client_ip: str):
+    """Record a new discovery request for rate limiting."""
+    _discovery_rate[client_ip].append(time.time())
+
+
+def _get_discovery_service() -> DiscoveryService:
+    """Create a DiscoveryService wired to the real dependencies."""
+    llm = get_llm_service()
+    pipeline = IngestionPipeline(
+        scraper=get_scraper_service(),
+        extractor=llm.extractor,
+    )
+    return DiscoveryService(
+        places_client=PlacesClient(),
+        pipeline=pipeline,
+    )
 
 
 @app.get("/")
@@ -245,6 +291,150 @@ async def ingest_pantry(pantry_id: str, request: IngestRequest):
     # Return the updated document
     updated = await pantries_collection.find_one({"_id": oid})
     return Pantry(**updated)
+
+
+# ── Discovery Endpoints ──────────────────────────────────────────────────────
+
+
+@app.post("/pantries/discover", status_code=201)
+async def start_discovery(request_body: DiscoveryRequest, request: Request):
+    """
+    Start a live discovery job for food pantries near a location.
+
+    Searches Google Places for food pantries, deduplicates against existing DB,
+    then scrapes each new URL via the Crawl4AI + Gemini pipeline.
+
+    Returns a job_id and SSE stream URL for progressive results.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+
+    # Rate limiting
+    if not _check_rate_limit(client_ip):
+        window_entries = _discovery_rate.get(client_ip, [])
+        oldest = min(window_entries) if window_entries else time.time()
+        retry_after = int(DISCOVERY_RATE_WINDOW - (time.time() - oldest)) + 1
+        logger.warning(
+            "Discovery rate limit exceeded",
+            extra={
+                "event": "discovery_rate_limited",
+                "client_ip": client_ip,
+                "retry_after_seconds": retry_after,
+            },
+        )
+        raise HTTPException(
+            status_code=429,
+            detail=f"Discovery rate limit exceeded. Try again in {retry_after} seconds.",
+        )
+
+    _record_rate_limit(client_ip)
+
+    service = _get_discovery_service()
+
+    # Count existing fresh pantries in the area
+    try:
+        existing_count = await service.count_fresh_pantries(
+            request_body.lat, request_body.lng, request_body.radius_meters
+        )
+    except Exception:
+        existing_count = 0
+
+    # Start the background discovery job
+    try:
+        job_status = await service.start_job(
+            query=request_body.query,
+            lat=request_body.lat,
+            lng=request_body.lng,
+            radius_meters=request_body.radius_meters,
+            client_ip=client_ip,
+        )
+    except PlacesAPIError as e:
+        logger.error(
+            "Discovery Places API failed",
+            extra={
+                "event": "discovery_places_failed",
+                "query": request_body.query,
+                "error": e.message,
+            },
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Could not search for pantries in this area.",
+        )
+
+    logger.info(
+        "Discovery endpoint: job created",
+        extra={
+            "event": "discovery_endpoint_started",
+            "job_id": job_status.job_id,
+            "query": request_body.query,
+            "lat": request_body.lat,
+            "lng": request_body.lng,
+            "radius_meters": request_body.radius_meters,
+            "existing_pantries": existing_count,
+            "client_ip": client_ip,
+        },
+    )
+
+    return DiscoveryResponse(
+        job_id=job_status.job_id,
+        status=DiscoveryStatus.RUNNING,
+        stream_url=f"/pantries/discover/stream/{job_status.job_id}",
+        existing_pantries=existing_count,
+    )
+
+
+@app.get("/pantries/discover/stream/{job_id}")
+async def stream_discovery(job_id: str, request: Request):
+    """
+    SSE endpoint — streams discovery events as pantries are found.
+
+    Event types: job_started, pantry_discovered, pantry_skipped,
+    pantry_failed, progress, complete, error, heartbeat.
+    """
+    service = _get_discovery_service()
+    status = await service.get_status(job_id)
+
+    if status is None:
+        raise HTTPException(status_code=404, detail="Discovery job not found")
+
+    async def event_generator():
+        async for event in service.event_stream(job_id):
+            if await request.is_disconnected():
+                logger.info(
+                    "SSE client disconnected",
+                    extra={"event": "sse_disconnect", "job_id": job_id},
+                )
+                break
+
+            event_type = event.get("event", "message")
+            data = event.get("data", {})
+
+            yield {
+                "event": event_type,
+                "data": json.dumps(data) if isinstance(data, dict) else str(data),
+            }
+
+            # Stop after terminal events
+            if event_type in ("complete", "error"):
+                break
+
+    return EventSourceResponse(event_generator())
+
+
+@app.get("/pantries/discover/status/{job_id}")
+async def get_discovery_status(job_id: str):
+    """
+    Polling fallback — returns current discovery job status.
+
+    Use the SSE stream endpoint for real-time updates.
+    """
+    service = _get_discovery_service()
+    status = await service.get_status(job_id)
+
+    if status is None:
+        raise HTTPException(status_code=404, detail="Discovery job not found")
+
+    return status.model_dump()
 
 
 if __name__ == "__main__":

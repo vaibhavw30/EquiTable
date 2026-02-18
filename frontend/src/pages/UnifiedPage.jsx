@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
-import { motion, useScroll, useTransform } from 'framer-motion'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
+import { motion } from 'framer-motion'
 import {
   Zap,
   MapPin,
@@ -9,23 +9,21 @@ import {
   ArrowRight,
   ChevronDown,
   Terminal,
-  Cpu,
-  Database,
-  CheckCircle,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 
 import useCities from '../hooks/useCities'
+import useMapLazyLoad from '../hooks/useMapLazyLoad'
+import MapPreviewSection from '../components/MapPreviewSection'
+import MapOverlay from '../components/MapOverlay'
 
-// Animated background grid
+// ─── Reused landing sections (moved from LandingPage.jsx) ────────────────────
+
 function GridBackground() {
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      {/* Gradient overlays */}
       <div className="absolute inset-0 bg-gradient-to-b from-zinc-950 via-transparent to-zinc-950" />
       <div className="absolute inset-0 bg-gradient-to-r from-zinc-950 via-transparent to-zinc-950" />
-
-      {/* Animated grid lines */}
       <div
         className="absolute inset-0 opacity-[0.03]"
         style={{
@@ -36,15 +34,12 @@ function GridBackground() {
           backgroundSize: '60px 60px',
         }}
       />
-
-      {/* Floating orbs */}
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl animate-pulse" />
       <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl animate-pulse delay-1000" />
     </div>
   )
 }
 
-// Live terminal feed (decorative)
 function TerminalFeed() {
   const [lines, setLines] = useState([
     { text: '> Initializing autonomous agents...', type: 'system' },
@@ -92,12 +87,10 @@ function TerminalFeed() {
   )
 }
 
-// Hero section
 function HeroSection() {
   return (
     <section className="relative min-h-screen flex items-center justify-center px-6">
       <div className="relative z-10 text-center max-w-4xl mx-auto">
-        {/* Status badge */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -108,7 +101,6 @@ function HeroSection() {
           <span className="text-sm text-emerald-400 font-medium">System Online</span>
         </motion.div>
 
-        {/* Main title */}
         <motion.h1
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
@@ -119,7 +111,6 @@ function HeroSection() {
           <span className="text-emerald-400">TABLE</span>
         </motion.h1>
 
-        {/* Subtitle */}
         <motion.p
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
@@ -129,49 +120,21 @@ function HeroSection() {
           The Intelligence Layer for Food Security
         </motion.p>
 
-        {/* CTA Button */}
         <motion.div
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.5 }}
         >
-          <Link
-            to="/map"
-            className="group relative inline-flex items-center gap-3 px-8 py-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-lg transition-all duration-300 hover:shadow-[0_0_40px_rgba(52,211,153,0.4)]"
-          >
-            <Zap className="w-5 h-5" />
-            LAUNCH SYSTEM
-            <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-
-            {/* Pulse ring */}
-            <span className="absolute inset-0 rounded-xl bg-emerald-400 animate-ping opacity-20" />
-          </Link>
-        </motion.div>
-
-        {/* Scroll indicator */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 1 }}
-          className="absolute bottom-12 left-1/2 -translate-x-1/2"
-        >
-          <ChevronDown className="w-6 h-6 text-zinc-600 animate-bounce" />
+          <ChevronDown className="w-6 h-6 text-zinc-600 animate-bounce mx-auto" />
         </motion.div>
       </div>
     </section>
   )
 }
 
-// Mission section
 function MissionSection() {
-  const { scrollYProgress } = useScroll()
-  const opacity = useTransform(scrollYProgress, [0.1, 0.3], [0, 1])
-
   return (
-    <motion.section
-      style={{ opacity }}
-      className="relative py-32 px-6"
-    >
+    <section className="relative py-32 px-6">
       <div className="max-w-4xl mx-auto text-center">
         <motion.p
           initial={{ opacity: 0 }}
@@ -195,11 +158,10 @@ function MissionSection() {
           EquiTable is the intelligence layer that bridges the gap — now live in Atlanta, NYC, LA, Chicago, and Houston.
         </motion.p>
       </div>
-    </motion.section>
+    </section>
   )
 }
 
-// How it works section
 function HowItWorksSection() {
   const steps = [
     {
@@ -247,11 +209,9 @@ function HowItWorksSection() {
               className="relative group"
             >
               <div className="p-8 rounded-2xl bg-zinc-900/50 border border-zinc-800/50 hover:border-emerald-500/30 transition-all duration-300">
-                {/* Step number */}
                 <div className="absolute -top-3 -left-3 w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center text-sm font-bold text-zinc-950">
                   {index + 1}
                 </div>
-
                 <step.icon className="w-10 h-10 text-emerald-400 mb-6" />
                 <h3 className="text-xl font-bold text-white mb-3">{step.title}</h3>
                 <p className="text-zinc-500 leading-relaxed">{step.description}</p>
@@ -264,7 +224,6 @@ function HowItWorksSection() {
   )
 }
 
-// Stats section
 function StatsSection({ cities }) {
   const totalPantries = cities.reduce((sum, c) => sum + c.count, 0)
   const cityCount = cities.length
@@ -303,13 +262,11 @@ function StatsSection({ cities }) {
   )
 }
 
-// Terminal decoration section
 function TerminalSection() {
   return (
     <section className="relative py-32 px-6">
       <div className="max-w-4xl mx-auto">
         <div className="relative rounded-2xl bg-zinc-900/80 border border-zinc-800/50 overflow-hidden">
-          {/* Terminal header */}
           <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800/50 bg-zinc-900">
             <div className="flex gap-1.5">
               <div className="w-3 h-3 rounded-full bg-red-500/80" />
@@ -318,13 +275,9 @@ function TerminalSection() {
             </div>
             <span className="text-xs text-zinc-600 ml-2">equitable-agent.sh</span>
           </div>
-
-          {/* Terminal content */}
           <div className="p-6 min-h-[200px]">
             <TerminalFeed />
           </div>
-
-          {/* Glow effect */}
           <div className="absolute inset-0 pointer-events-none bg-gradient-to-t from-emerald-500/5 to-transparent" />
         </div>
       </div>
@@ -332,8 +285,7 @@ function TerminalSection() {
   )
 }
 
-// Final CTA section
-function FinalCTASection() {
+function FinalCTASection({ onOpenMap }) {
   return (
     <section className="relative py-32 px-6">
       <div className="max-w-3xl mx-auto text-center">
@@ -352,21 +304,20 @@ function FinalCTASection() {
             Join us in transforming food security infrastructure across America's cities with intelligent, autonomous systems.
           </p>
 
-          <Link
-            to="/map"
+          <button
+            onClick={onOpenMap}
             className="inline-flex items-center gap-3 px-8 py-4 rounded-xl bg-white hover:bg-zinc-100 text-zinc-950 font-semibold text-lg transition-all"
           >
             <MapPin className="w-5 h-5" />
             Find Food Now
             <ArrowRight className="w-5 h-5" />
-          </Link>
+          </button>
         </motion.div>
       </div>
     </section>
   )
 }
 
-// Footer
 function Footer() {
   return (
     <footer className="border-t border-zinc-800/50 py-8 px-6">
@@ -384,9 +335,33 @@ function Footer() {
   )
 }
 
-// Main Landing Page
-export default function LandingPage() {
+// ─── Main Unified Page ───────────────────────────────────────────────────────
+
+export default function UnifiedPage() {
+  const location = useLocation()
+  const scrollPosRef = useRef(0)
+
+  // Auto-expand if user navigated to /map
+  const [mapExpanded, setMapExpanded] = useState(location.pathname === '/map')
+
   const { cities } = useCities()
+
+  // Shared data layer — fetch pantries once when map section enters viewport
+  // Same data is passed to both MapPreviewSection and MapOverlay (no re-fetch)
+  const { isInView: mapInView, onBecomeVisible, pantries: sharedPantries } = useMapLazyLoad()
+
+  const handleExpandMap = useCallback(() => {
+    scrollPosRef.current = window.scrollY
+    setMapExpanded(true)
+  }, [])
+
+  const handleCollapseMap = useCallback(() => {
+    setMapExpanded(false)
+    // Restore scroll position after overlay closes
+    requestAnimationFrame(() => {
+      window.scrollTo(0, scrollPosRef.current)
+    })
+  }, [])
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white overflow-x-hidden">
@@ -394,10 +369,26 @@ export default function LandingPage() {
       <HeroSection />
       <MissionSection />
       <HowItWorksSection />
+
+      {/* Map preview — embedded in scroll flow, shared data */}
+      <MapPreviewSection
+        isInView={mapInView}
+        onBecomeVisible={onBecomeVisible}
+        pantries={sharedPantries}
+        onExpand={handleExpandMap}
+      />
+
       <StatsSection cities={cities} />
       <TerminalSection />
-      <FinalCTASection />
+      <FinalCTASection onOpenMap={handleExpandMap} />
       <Footer />
+
+      {/* Full-screen map overlay — receives pre-fetched pantries */}
+      <MapOverlay
+        isOpen={mapExpanded}
+        onClose={handleCollapseMap}
+        initialPantries={sharedPantries}
+      />
     </div>
   )
 }

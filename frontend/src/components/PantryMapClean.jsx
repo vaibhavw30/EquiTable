@@ -7,8 +7,9 @@ import {
   Pin,
   useMap,
 } from '@vis.gl/react-google-maps'
-import { Clock, Shield, MapPin } from 'lucide-react'
+import { Clock, Shield, MapPin, Navigation, ExternalLink, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
+import PlaceSearchControl from './PlaceSearchControl'
 
 const MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_KEY
 
@@ -67,6 +68,19 @@ const CLEAN_MAP_STYLE = [
     stylers: [{ color: '#ffffff' }],
   },
 ]
+
+// Build a Google Maps directions URL for a pantry
+function directionsUrl(pantry) {
+  const destination = encodeURIComponent(pantry.address)
+  return `https://www.google.com/maps/dir/?api=1&destination=${destination}`
+}
+
+const STATUS_LABELS = {
+  OPEN: { text: 'Open', className: 'bg-green-100 text-green-700' },
+  CLOSED: { text: 'Closed', className: 'bg-red-100 text-red-700' },
+  WAITLIST: { text: 'Waitlist', className: 'bg-amber-100 text-amber-700' },
+  UNKNOWN: { text: 'Unknown', className: 'bg-zinc-100 text-zinc-600' },
+}
 
 /**
  * 4-color pin logic:
@@ -131,8 +145,22 @@ function RadiusCircle({ center, radius }) {
   return null
 }
 
+// Animated marker wrapper — staggered scale-in for discovered pantries
+function AnimatedMarkerWrapper({ children, index, isDiscovered }) {
+  if (!isDiscovered) return children
+
+  return (
+    <div
+      className="animate-marker-pop"
+      style={{ animationDelay: `${index * 120}ms` }}
+    >
+      {children}
+    </div>
+  )
+}
+
 // Inner component to access map instance
-function MapContent({ pantries, userLocation, selectedPantry, onPantrySelect, center, zoom, radiusCenter, radiusMeters }) {
+function MapContent({ pantries, userLocation, selectedPantry, onPantrySelect, center, zoom, radiusCenter, radiusMeters, discoveredIds }) {
   const map = useMap()
   const [infoWindowPantry, setInfoWindowPantry] = useState(null)
 
@@ -170,23 +198,26 @@ function MapContent({ pantries, userLocation, selectedPantry, onPantrySelect, ce
       <RadiusCircle center={radiusCenter} radius={radiusMeters} />
 
       {/* Pantry markers */}
-      {pantries.map((pantry) => {
+      {pantries.map((pantry, index) => {
         const colors = markerColors(pantry)
         const isSelected = selectedPantry?._id === pantry._id
+        const isDiscovered = discoveredIds?.has(pantry._id) || discoveredIds?.has(pantry.pantry_id)
 
         return (
           <AdvancedMarker
-            key={pantry._id}
+            key={pantry._id || pantry.pantry_id || index}
             position={{ lat: pantry.lat, lng: pantry.lng }}
             onClick={() => handleMarkerClick(pantry)}
-            zIndex={isSelected ? 100 : 1}
+            zIndex={isSelected ? 100 : isDiscovered ? 50 : 1}
           >
-            <Pin
-              background={colors.background}
-              glyphColor={colors.glyphColor}
-              borderColor={isSelected ? '#000' : colors.borderColor}
-              scale={isSelected ? 1.2 : 1}
-            />
+            <AnimatedMarkerWrapper index={index} isDiscovered={isDiscovered}>
+              <Pin
+                background={colors.background}
+                glyphColor={colors.glyphColor}
+                borderColor={isSelected ? '#000' : colors.borderColor}
+                scale={isSelected ? 1.2 : 1}
+              />
+            </AnimatedMarkerWrapper>
           </AdvancedMarker>
         )
       })}
@@ -201,30 +232,81 @@ function MapContent({ pantries, userLocation, selectedPantry, onPantrySelect, ce
         </AdvancedMarker>
       )}
 
-      {/* Minimal InfoWindow on marker click */}
+      {/* InfoWindow on marker click */}
       {infoWindowPantry && (
         <InfoWindow
           position={{ lat: infoWindowPantry.lat, lng: infoWindowPantry.lng }}
           onCloseClick={() => setInfoWindowPantry(null)}
           pixelOffset={[0, -40]}
         >
-          <div className="p-2 max-w-[200px]">
-            <h3 className="font-semibold text-zinc-900 text-sm mb-1">
-              {infoWindowPantry.name}
-            </h3>
+          <div className="p-3 max-w-[280px]">
+            {/* Name + Status */}
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <h3 className="font-bold text-zinc-900 text-sm leading-tight">
+                {infoWindowPantry.name}
+              </h3>
+              <span className={`flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${STATUS_LABELS[infoWindowPantry.status]?.className || STATUS_LABELS.UNKNOWN.className}`}>
+                {STATUS_LABELS[infoWindowPantry.status]?.text || 'Unknown'}
+              </span>
+            </div>
 
+            {/* Address with directions link */}
+            <a
+              href={directionsUrl(infoWindowPantry)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-start gap-1.5 text-xs text-blue-600 hover:text-blue-800 hover:underline mb-2"
+            >
+              <MapPin className="w-3 h-3 mt-0.5 flex-shrink-0" />
+              <span>{infoWindowPantry.address}</span>
+            </a>
+
+            {/* Hours */}
             {infoWindowPantry.hours_today && (
-              <div className="flex items-center gap-1 text-xs text-zinc-600 mb-1">
-                <Clock className="w-3 h-3" />
-                <span>{infoWindowPantry.hours_today}</span>
+              <div className="flex items-center gap-1.5 text-xs text-zinc-700 mb-1.5">
+                <Clock className="w-3 h-3 text-zinc-400 flex-shrink-0" />
+                <span><span className="font-medium">Today:</span> {infoWindowPantry.hours_today}</span>
               </div>
             )}
 
-            <div className="flex items-center gap-1 text-xs">
-              <Shield className="w-3 h-3" />
-              <span className={infoWindowPantry.is_id_required ? 'text-amber-600' : 'text-green-600'}>
+            {/* ID Requirement */}
+            <div className="flex items-center gap-1.5 text-xs mb-2">
+              <Shield className="w-3 h-3 flex-shrink-0" />
+              <span className={infoWindowPantry.is_id_required ? 'text-amber-600 font-medium' : 'text-green-600 font-medium'}>
                 {infoWindowPantry.is_id_required ? 'ID Required' : 'No ID Required'}
               </span>
+            </div>
+
+            {/* Special notes */}
+            {infoWindowPantry.special_notes && (
+              <div className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 rounded p-1.5 mb-2">
+                <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                <span className="line-clamp-2">{infoWindowPantry.special_notes}</span>
+              </div>
+            )}
+
+            {/* Action links */}
+            <div className="flex items-center gap-3 pt-1.5 border-t border-zinc-100">
+              <a
+                href={directionsUrl(infoWindowPantry)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700"
+              >
+                <Navigation className="w-3 h-3" />
+                Directions
+              </a>
+              {infoWindowPantry.source_url && (
+                <a
+                  href={infoWindowPantry.source_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  Website
+                </a>
+              )}
             </div>
           </div>
         </InfoWindow>
@@ -243,6 +325,10 @@ export default function PantryMapClean({
   radiusMeters,
   zoom,
   className,
+  gestureHandling = 'greedy',
+  discoveredIds,
+  onIdle,
+  onPlaceSelect,
 }) {
   const mapCenter = center || DEFAULT_CENTER
 
@@ -253,11 +339,13 @@ export default function PantryMapClean({
           defaultCenter={mapCenter}
           defaultZoom={DEFAULT_ZOOM}
           mapId="equitable-clean-map"
-          gestureHandling="greedy"
+          gestureHandling={gestureHandling}
           disableDefaultUI={false}
           styles={CLEAN_MAP_STYLE}
           className="w-full h-full"
+          onIdle={onIdle}
         >
+          <PlaceSearchControl onPlaceSelect={onPlaceSelect} />
           <MapContent
             pantries={pantries}
             userLocation={userLocation}
@@ -267,6 +355,7 @@ export default function PantryMapClean({
             zoom={zoom}
             radiusCenter={radiusCenter}
             radiusMeters={radiusMeters}
+            discoveredIds={discoveredIds}
           />
         </Map>
       </APIProvider>

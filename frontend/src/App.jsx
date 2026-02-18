@@ -1,13 +1,13 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import LandingPage from './pages/LandingPage'
-import MapPage from './pages/MapPage'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import UnifiedPage from './pages/UnifiedPage'
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/map" element={<MapPage />} />
+        <Route path="/" element={<UnifiedPage />} />
+        <Route path="/map" element={<UnifiedPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   )
