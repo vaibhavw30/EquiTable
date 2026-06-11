@@ -26,8 +26,14 @@ async def aggregate_report_node(state: ParentState) -> dict:
         "cost_spent_usd": round(state.get("cost_spent_usd", 0.0), 4),
         "quarantined": len(state.get("quarantined", [])),
     }
+    quarantined = state.get("quarantined", [])
     logger.info(
         "Refresh run summary",
-        extra={"event": "refresh_summary", **summary},
+        extra={
+            "event": "refresh_summary",
+            **summary,
+            "curator_reasoning": state.get("curator_reasoning", ""),
+            "quarantined_sources": [q.get("source_url") for q in quarantined],
+        },
     )
     return {"results": results}  # passthrough; summary is logged

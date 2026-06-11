@@ -465,6 +465,8 @@ Escalation triggers on validation failure **or** `confidence < CONFIDENCE_THRESH
 
 **Re-evaluation trigger**: If `langgraph-checkpoint-mongodb` releases an async saver, simplify `checkpointer.py`. If checkpoint storage grows large over time, add a TTL index on the checkpoint collections (checkpoints older than 7 days can be dropped safely).
 
+**Resume-granularity limitation (honest note)**: LangGraph checkpointing operates at superstep/node granularity. Because the entire per-source fan-out is encapsulated inside the single `process_sources` node, a crash mid-fan-out resumes by re-executing that whole node — re-scraping all selected sources for that run. This is **safe**: the per-source upserts are idempotent (keyed on `source_url`) and the 24 h freshness floor means re-refreshed sources are simply no-ops on the next scheduled run. There is no risk of duplicate or clobbered data. However, it is re-work, not per-source incremental resume. True per-source resume would require modeling each source as its own LangGraph branch via the Send API — intentionally deferred because the complexity is not justified for a once-daily batch job at current scale.
+
 ---
 
 ## Template for New Decisions

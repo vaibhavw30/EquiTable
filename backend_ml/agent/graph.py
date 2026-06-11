@@ -13,6 +13,7 @@ as structured events and the source is recorded with outcome="failed".
 
 import asyncio
 import logging
+import time
 
 from langgraph.graph import StateGraph, START, END
 
@@ -53,7 +54,9 @@ def make_process_sources_node(subgraph, cost_tracker):
                     "latency_ms": 0.0,
                     "model_tier": None,
                     "had_validation_error": False,
+                    "reason": "cost budget exhausted",
                 }
+            start = time.time()
             try:
                 final = await subgraph.ainvoke({
                     "source_url": src["source_url"],
@@ -62,14 +65,27 @@ def make_process_sources_node(subgraph, cost_tracker):
                     "retry_count": 0,
                     "validation_errors": [],
                 })
+                elapsed_ms = round((time.time() - start) * 1000, 2)
+                outcome = final.get("outcome", "failed")
+                if outcome == "failed":
+                    if not final.get("raw_markdown"):
+                        reason = "scrape returned no content"
+                    elif final.get("validation_errors"):
+                        reason = "; ".join(final.get("validation_errors") or [])
+                    else:
+                        reason = "unknown failure"
+                else:
+                    reason = None
                 return {
                     "source_url": src["source_url"],
-                    "outcome": final.get("outcome", "failed"),
-                    "latency_ms": final.get("latency_ms", 0.0),
+                    "outcome": outcome,
+                    "latency_ms": elapsed_ms,
                     "model_tier": final.get("model_tier", 0),
                     "had_validation_error": bool(final.get("validation_errors")),
+                    "reason": reason,
                 }
             except Exception as exc:
+                elapsed_ms = round((time.time() - start) * 1000, 2)
                 # Defense-in-depth: one bad source must not abort the batch.
                 logger.error(
                     "Unhandled exception in per-source subgraph invocation",
@@ -83,9 +99,10 @@ def make_process_sources_node(subgraph, cost_tracker):
                 return {
                     "source_url": src["source_url"],
                     "outcome": "failed",
-                    "latency_ms": 0.0,
+                    "latency_ms": elapsed_ms,
                     "model_tier": None,
                     "had_validation_error": False,
+                    "reason": str(exc),
                 }
 
     async def process_sources_node(state: ParentState) -> dict:
@@ -119,7 +136,7 @@ def build_refresh_graph(
         subgraph: Compiled extraction subgraph (or duck-typed fake).
         cost_tracker: CostTracker used by process_sources_node.
         update_metrics_node: Async node produced by make_update_metrics_node().
-        checkpointer: Optional LangGraph checkpointer (e.g. AsyncMongoDBSaver).
+        checkpointer: Optional LangGraph checkpointer (e.g. MongoDBSaver — see ADR-020).
 
     Note: the compiled graph holds a stateful ``cost_tracker`` and a per-call
     semaphore; build a fresh graph per run — do not re-invoke a compiled graph
