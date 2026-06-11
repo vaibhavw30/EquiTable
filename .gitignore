@@ -57,3 +57,6 @@ backend_ml/scripts/.scrape_cache.json
 # Claude-related files (may commit later)
 CLAUDE.md
 agents/
+
+# Git worktrees (isolated workspaces)
+.worktrees/
