@@ -25,10 +25,24 @@ MONGO_URI = os.getenv("MONGO_URI")
 TEST_DB_NAME = "equitable_test"
 
 
+def _mongo_client_kwargs() -> dict:
+    """Apply TLS only for Atlas/SRV URIs.
+
+    Atlas (mongodb+srv://) requires TLS with a CA bundle. A local dev MongoDB
+    (plain mongodb://localhost) speaks plaintext, so passing tlsCAFile there
+    forces a TLS handshake the server can't satisfy. Gate on the URI shape so
+    the same suite runs against both Atlas and a local container.
+    """
+    uri = (MONGO_URI or "").lower()
+    if "mongodb+srv" in uri or "mongodb.net" in uri or "tls=true" in uri or "ssl=true" in uri:
+        return {"tlsCAFile": certifi.where()}
+    return {}
+
+
 @pytest_asyncio.fixture
 async def test_db():
-    """Create a test database on Atlas that gets cleaned up after each test."""
-    mongo_client = AsyncIOMotorClient(MONGO_URI, tlsCAFile=certifi.where())
+    """Create a test database that gets cleaned up after each test."""
+    mongo_client = AsyncIOMotorClient(MONGO_URI, **_mongo_client_kwargs())
     db = mongo_client[TEST_DB_NAME]
 
     # Ensure 2dsphere index exists (required for $near queries)
