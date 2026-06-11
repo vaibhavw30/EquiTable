@@ -19,12 +19,21 @@ Usage:
         await app.ainvoke(state, {"configurable": {"thread_id": run_id}})
 """
 
+from __future__ import annotations
+
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from langgraph.checkpoint.mongodb import MongoDBSaver
 
 
 @asynccontextmanager
-async def mongo_checkpointer(uri: str = None, db_name: str = "equitable"):
+async def mongo_checkpointer(
+    uri: str | None = None, db_name: str = "equitable"
+) -> AsyncIterator[MongoDBSaver]:
     """Yield a MongoDBSaver bound to the given database.
 
     Args:
