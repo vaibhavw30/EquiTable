@@ -192,7 +192,7 @@ The `pantries` collection schema is unchanged. `persist` writes the same fields 
 
 - **Per-run budget:** `MAX_COST_USD` (default **$0.50/run**), passed into ParentState.
 - **Tracker (`cost.py`):** accumulates `tokens × per-model price` across the curator and every extraction attempt. Per-model prices are config constants.
-- **Enforcement:** before scheduling a new source (and before each retry escalation), the orchestrator checks the budget. If the next call would exceed it, no new sources are scheduled, in-flight subgraphs are allowed to finish, and the run exits cleanly with `outcome="skipped_budget"` recorded for unprocessed sources. The cap is logged and traced.
+- **Enforcement:** the budget gate is checked before invoking each source (inside the semaphore slot, before the subgraph runs). However, because the fan-out admits up to `MAX_CONCURRENT` sources concurrently before any of them has spent tokens, the realized spend can exceed the configured budget by at most `MAX_CONCURRENT × max-per-source-cost` before remaining queued sources are marked `skipped_budget`. This is a **soft cap** — intentional for a background batch job at this cost scale (~$1–2/mo); a hard cap would require cost reservation and is not implemented. In-flight subgraphs are always allowed to finish, and the run exits cleanly. The cap is logged and traced.
 - **Prompt caching:** the static extraction system prompt + few-shot examples are sent via Gemini context caching so repeated extractions don't re-pay for the static prefix.
 
 ---

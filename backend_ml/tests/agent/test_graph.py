@@ -59,6 +59,70 @@ async def test_budget_exhaustion_skips_remaining(test_db):
     assert all(r["outcome"] == "skipped_budget" for r in final["results"])
 
 
+# ── Budget soft-cap crossover test ───────────────────────────────────────────
+
+async def test_budget_crosses_midrun_skips_remainder(test_db):
+    """Pin the soft-cap contract: admitted sources can overrun by ≤ MAX_CONCURRENT × per-source-cost.
+
+    A 'spending subgraph' spends ~$0.20 per call by calling cost_tracker.add_usage
+    with enough tokens to reach that cost.  With budget_usd=0.50 and 8 sources,
+    at most MAX_CONCURRENT sources can run before the budget gate flips — the rest
+    are marked skipped_budget.
+    """
+    from agent.config import MAX_CONCURRENT, MODEL_PRICING
+    import math
+
+    await _seed(test_db, 8)
+
+    tracker = CostTracker(budget_usd=0.50)
+
+    # Compute N so that one call spends exactly ~$0.20 using gemini-2.0-flash input pricing
+    in_price_per_1m, _ = MODEL_PRICING["gemini-2.0-flash"]   # 0.10 USD/1M tokens
+    per_call_usd = 0.20
+    n_input_tokens = math.ceil(per_call_usd / (in_price_per_1m / 1_000_000))
+
+    class _SpendingSubgraph:
+        """Fake subgraph that charges ~$0.20 per invocation via the shared tracker."""
+        def __init__(self, cost_tracker):
+            self._tracker = cost_tracker
+
+        async def ainvoke(self, state: dict) -> dict:
+            self._tracker.add_usage("gemini-2.0-flash",
+                                    input_tokens=n_input_tokens,
+                                    output_tokens=0)
+            return {
+                "outcome": "success",
+                "latency_ms": 10.0,
+                "model_tier": 0,
+                "validation_errors": [],
+            }
+
+    spending_sub = _SpendingSubgraph(tracker)
+
+    app = build_refresh_graph(
+        make_load_sources_node(db=test_db),
+        make_curator_node(ranker=None),
+        spending_sub,
+        tracker,
+        make_update_metrics_node(db=test_db),
+    )
+    final = await app.ainvoke({"run_id": "t_crossover", "cost_budget_usd": 0.50})
+
+    outcomes = [r["outcome"] for r in final["results"]]
+
+    # At least one source ran and at least one was skipped
+    assert "success" in outcomes, "Expected at least one source to run successfully"
+    assert "skipped_budget" in outcomes, "Expected at least one source to be skipped_budget"
+
+    # Realized spend must not exceed the documented bound: MAX_CONCURRENT × per_call_usd
+    epsilon = 0.001   # floating-point tolerance
+    max_allowed_spend = MAX_CONCURRENT * per_call_usd + epsilon
+    assert tracker.spent_usd <= max_allowed_spend, (
+        f"Realized overrun {tracker.spent_usd:.4f} exceeds documented bound "
+        f"MAX_CONCURRENT({MAX_CONCURRENT}) × per_call({per_call_usd}) = {MAX_CONCURRENT * per_call_usd:.2f}"
+    )
+
+
 # ── Robustness enhancement: one-source-crash must not abort the whole batch ──
 
 class _CrashingSubgraph:

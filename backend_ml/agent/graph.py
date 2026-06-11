@@ -30,6 +30,17 @@ def make_process_sources_node(subgraph, cost_tracker):
         subgraph: Compiled LangGraph subgraph (or duck-typed fake with ainvoke).
         cost_tracker: CostTracker — checked before each invocation; exhausted →
             source recorded as "skipped_budget" without calling the subgraph.
+
+    Budget soft-cap note:
+        The budget check (``cost_tracker.is_exhausted``) is evaluated inside the
+        semaphore, AFTER the slot is acquired but BEFORE the subgraph is called.
+        Because up to MAX_CONCURRENT sources can acquire slots concurrently before
+        any of them has had a chance to spend tokens, the realized spend can exceed
+        the configured budget by at most ``MAX_CONCURRENT × (max per-source cost)``
+        before the remaining queued sources are marked ``skipped_budget``.  For
+        this background batch job (~$1–2/mo) that overrun is acceptable.
+        Eliminating it would require cost reservation (reserving expected cost
+        before granting the slot), which is intentionally NOT implemented here.
     """
     sem = asyncio.Semaphore(MAX_CONCURRENT)
 
@@ -109,6 +120,10 @@ def build_refresh_graph(
         cost_tracker: CostTracker used by process_sources_node.
         update_metrics_node: Async node produced by make_update_metrics_node().
         checkpointer: Optional LangGraph checkpointer (e.g. AsyncMongoDBSaver).
+
+    Note: the compiled graph holds a stateful ``cost_tracker`` and a per-call
+    semaphore; build a fresh graph per run — do not re-invoke a compiled graph
+    across runs.
     """
     g = StateGraph(ParentState)
 

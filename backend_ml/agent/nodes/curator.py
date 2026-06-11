@@ -9,6 +9,7 @@ MAX_SOURCES_PER_RUN.
 
 import json
 import logging
+from datetime import datetime, timezone
 
 from agent.config import MAX_SOURCES_PER_RUN, QUARANTINE_THRESHOLD
 from agent.state import ParentState
@@ -80,9 +81,19 @@ def make_llm_ranker(chat_model):
     from langchain_core.messages import HumanMessage
 
     async def ranker(candidates):
+        now = datetime.now(timezone.utc)
+
+        def _hours_since(lu):
+            if lu is None:
+                return None
+            # Handle tz-naive datetimes by assuming UTC
+            if lu.tzinfo is None:
+                lu = lu.replace(tzinfo=timezone.utc)
+            return int((now - lu).total_seconds() / 3600)
+
         summary = [
             {"source_url": c["source_url"], "city": c.get("city"),
-             "hours_stale": None if not c.get("last_updated") else "stale",
+             "hours_since_update": _hours_since(c.get("last_updated")),
              "success_rate": c.get("success_rate"),
              "consecutive_failures": c.get("consecutive_failures", 0)}
             for c in candidates
@@ -98,12 +109,12 @@ def make_llm_ranker(chat_model):
         resp = await chat_model.ainvoke([HumanMessage(content=prompt)])
         text = resp.content.strip()
         if text.startswith("```"):
-            text = text.split("```")[1].lstrip("json").strip()
+            text = text.split("```")[1].removeprefix("json").strip()
         parsed = json.loads(text)
         by_url = {c["source_url"]: c for c in candidates}
-        ordered = [by_url[u] for u in parsed["selected"] if u in by_url]
+        ordered = [by_url[u] for u in parsed.get("selected", []) if u in by_url]
         # append anything the LLM dropped, staleness-first — nothing is lost
-        missing = [c for c in candidates if c["source_url"] not in parsed["selected"]]
+        missing = [c for c in candidates if c["source_url"] not in parsed.get("selected", [])]
         ordered += _staleness_sort(missing)
         return ordered, parsed.get("reasoning", "")
     return ranker
