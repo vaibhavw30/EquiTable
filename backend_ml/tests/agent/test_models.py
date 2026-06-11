@@ -13,6 +13,7 @@ def test_factory_uses_correct_model_per_tier():
     assert f.get(1) == "client::gemini-2.0-flash"
     assert f.get(2) == "client::gemini-2.5-flash"
     assert f.get(9) == "client::gemini-2.5-flash"   # clamps to last rung
+    assert len(seen) == 3  # builder called once per distinct model name across 4 gets
 
 
 def test_factory_caches_per_tier():

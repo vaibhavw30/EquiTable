@@ -13,7 +13,7 @@ from agent.config import model_for_tier
 from agent.state import ExtractionResult
 
 
-def _default_builder(model_name: str):
+def _default_builder(model_name: str) -> object:
     from langchain_google_genai import ChatGoogleGenerativeAI
     llm = ChatGoogleGenerativeAI(
         model=model_name,
@@ -28,7 +28,7 @@ class ModelFactory:
         self._builder = builder or _default_builder
         self._cache: dict[str, object] = {}
 
-    def get(self, tier: int):
+    def get(self, tier: int) -> object:
         name = model_for_tier(tier)
         if name not in self._cache:
             self._cache[name] = self._builder(name)

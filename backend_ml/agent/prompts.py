@@ -1,5 +1,6 @@
 """Builds the extraction system prompt by reusing services/extractor loaders."""
 
+# Reuse the live extractor's prompt loader/date helper (DRY — single source of truth for prompt text).
 from services.extractor import _load_prompt_file, get_current_date_context
 
 

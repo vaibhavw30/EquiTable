@@ -19,14 +19,22 @@ class FakeStructuredModel:
 
     `scripted` is a list of ExtractionResult (or dict) returned in order per
     ainvoke call, letting a test simulate 'fail then succeed' retries.
+
+    An entry that is an Exception instance simulates a parse failure — ainvoke
+    returns {"raw": ..., "parsed": None, "parsing_error": <exc>}, matching the
+    real with_structured_output(include_raw=True) behaviour on bad output.
     """
     def __init__(self, scripted):
+        if not scripted:
+            raise ValueError("FakeStructuredModel requires a non-empty scripted list")
         self._scripted = list(scripted)
         self.calls = 0
 
     async def ainvoke(self, messages):
         result = self._scripted[min(self.calls, len(self._scripted) - 1)]
         self.calls += 1
+        if isinstance(result, Exception):
+            return {"raw": FakeRawMessage(), "parsed": None, "parsing_error": result}
         if isinstance(result, dict):
             result = ExtractionResult(**result)
         return {"raw": FakeRawMessage(), "parsed": result, "parsing_error": None}
@@ -35,6 +43,8 @@ class FakeStructuredModel:
 class FakeModelFactory:
     """Returns a FakeStructuredModel per tier; records which tiers were used."""
     def __init__(self, scripted_by_tier):
+        if not scripted_by_tier:
+            raise ValueError("FakeModelFactory requires a non-empty scripted_by_tier list")
         self._by_tier = scripted_by_tier
         self.tiers_used = []
 
