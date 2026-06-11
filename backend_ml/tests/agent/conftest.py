@@ -29,8 +29,10 @@ class FakeStructuredModel:
             raise ValueError("FakeStructuredModel requires a non-empty scripted list")
         self._scripted = list(scripted)
         self.calls = 0
+        self.last_messages = None
 
     async def ainvoke(self, messages):
+        self.last_messages = messages
         result = self._scripted[min(self.calls, len(self._scripted) - 1)]
         self.calls += 1
         if isinstance(result, Exception):
@@ -52,6 +54,10 @@ class FakeModelFactory:
         self.tiers_used.append(tier)
         idx = min(tier, len(self._by_tier) - 1)
         return self._by_tier[idx]
+
+    def name_for_tier(self, tier):
+        from agent.config import model_for_tier
+        return model_for_tier(tier)
 
 
 class FakeScraper:

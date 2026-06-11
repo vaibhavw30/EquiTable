@@ -33,8 +33,8 @@ async def test_extract_uses_escalated_tier_and_feeds_errors_back():
                 "validation_errors": ["confidence: must be 1-10, got 99"]})
     assert factory.tiers_used == [1]      # escalated tier used
     # the feedback string must reach the model's messages
-    sent = model1  # second-tier model received the call
-    assert sent.calls == 1
+    human = model1.last_messages[-1].content
+    assert "confidence: must be 1-10, got 99" in human
 
 
 async def test_extract_handles_parse_error():

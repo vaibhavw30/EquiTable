@@ -33,3 +33,7 @@ class ModelFactory:
         if name not in self._cache:
             self._cache[name] = self._builder(name)
         return self._cache[name]
+
+    def name_for_tier(self, tier: int) -> str:
+        """The model name billed for this tier (cost key matches get(tier))."""
+        return model_for_tier(tier)

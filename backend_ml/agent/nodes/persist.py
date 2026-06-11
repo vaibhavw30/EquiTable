@@ -6,8 +6,11 @@ attempt is still invalid (validation_errors non-empty), we DO NOT write —
 refusing to clobber good existing data with a bad extraction.
 """
 
+import logging
 from datetime import datetime, timezone
 from agent.state import ExtractionState
+
+logger = logging.getLogger("equitable")
 
 
 def make_persist_node(db=None):
@@ -19,9 +22,16 @@ def make_persist_node(db=None):
 
     async def persist_node(state: ExtractionState) -> dict:
         if state.get("validation_errors"):
+            logger.info(
+                "Agent persist skipped (still invalid after retries)",
+                extra={"event": "agent_persist_skipped", "source_url": state.get("source_url")},
+            )
             return {"outcome": "failed", "final_update": None}
 
-        data = state["extracted_data"]
+        data = state.get("extracted_data")
+        if not data:
+            return {"outcome": "failed", "final_update": None}
+
         update = {
             "status": data["status"],
             "hours_notes": data["hours_notes"],
@@ -33,7 +43,7 @@ def make_persist_node(db=None):
             "confidence": data["confidence"],
             "last_updated": datetime.now(timezone.utc),
             "scraped_at": datetime.now(timezone.utc),
-            "scrape_method": "crawl4ai",
+            "scrape_method": state.get("scrape_method", "crawl4ai"),
         }
         await _collection().update_one(
             {"source_url": state["source_url"]}, {"$set": update}

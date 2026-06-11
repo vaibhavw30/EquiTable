@@ -22,6 +22,9 @@ async def validate_node(state: ExtractionState) -> dict:
 
 def should_retry(state: ExtractionState) -> str:
     has_errors = bool(state.get("validation_errors"))
+    # confidence is None only when extraction produced no data; in that case
+    # validate_node has already set validation_errors, so has_errors fires the
+    # retry. The `or 0` is belt-and-suspenders for future validator relaxation.
     low_conf = (state.get("confidence") or 0) < CONFIDENCE_THRESHOLD
     if (has_errors or low_conf) and state.get("retry_count", 0) < MAX_RETRIES:
         return "retry"
