@@ -1,12 +1,12 @@
 """Typed state for the refresh agent graphs."""
 
-from typing import Optional, TypedDict
+from typing import Literal, Optional, TypedDict
 from pydantic import BaseModel, Field
 
 
 class ExtractionResult(BaseModel):
     """Structured-output schema for Gemini extraction (mirrors RESPONSE_SCHEMA)."""
-    status: str = Field(description="OPEN | CLOSED | WAITLIST | UNKNOWN")
+    status: Literal["OPEN", "CLOSED", "WAITLIST", "UNKNOWN"]
     hours_notes: str
     hours_today: str
     eligibility_rules: list[str]
@@ -27,7 +27,7 @@ class ExtractionState(TypedDict, total=False):
     retry_count: int
     model_tier: int
     latency_ms: float
-    outcome: str            # "success" | "failed" | "skipped_budget"
+    outcome: Literal["success", "failed", "skipped_budget"]
     final_update: Optional[dict]
 
 
