@@ -32,10 +32,12 @@ def make_load_sources_node(db=None):
                 "last_updated": doc.get("last_updated"),
             })
 
-        # Join metrics
+        # Join metrics — only fetch documents for the candidate URLs (not the whole collection)
+        urls = [c["source_url"] for c in candidates]
         metrics = {}
-        async for m in database["source_metrics"].find({}):
-            metrics[m["source_url"]] = m
+        if urls:
+            async for m in database["source_metrics"].find({"source_url": {"$in": urls}}):
+                metrics[m["source_url"]] = m
         for c in candidates:
             m = metrics.get(c["source_url"], {})
             c["consecutive_failures"] = m.get("consecutive_failures", 0)

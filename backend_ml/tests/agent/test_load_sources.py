@@ -19,6 +19,11 @@ async def test_loads_only_stale_pantries_with_source_url(test_db):
     out = await node({})
     urls = {c["source_url"] for c in out["candidate_sources"]}
     assert urls == {"https://stale.org"}
+    # Cold-start: candidate with no metrics entry gets safe defaults
+    stale = out["candidate_sources"][0]
+    assert stale["consecutive_failures"] == 0
+    assert stale["success_rate"] is None
+    assert stale["avg_latency_ms"] is None
 
 
 async def test_joins_metrics(test_db):
