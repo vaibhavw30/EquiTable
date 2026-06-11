@@ -65,6 +65,12 @@ async def connect_to_mongo():
     )
     logger.info("Ensured discovery_cache TTL index", extra={"event": "db_index_created", "collection": "discovery_cache", "index": "discovery_cache_ttl"})
 
+    # Unique index on source_metrics.source_url
+    await db["source_metrics"].create_index(
+        [("source_url", 1)], name="source_metrics_url_unique", unique=True,
+    )
+    logger.info("Ensured source_metrics unique index", extra={"event": "db_index_created", "collection": "source_metrics", "index": "source_metrics_url_unique"})
+
 
 async def close_mongo_connection():
     """Close database connection on shutdown"""
