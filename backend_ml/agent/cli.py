@@ -35,7 +35,7 @@ from agent.nodes.metrics import make_update_metrics_node
 logger = logging.getLogger("equitable")
 
 
-async def run_refresh(db_name: str = None) -> dict:
+async def run_refresh(db_name: str | None = None) -> dict:
     """Run a single refresh pass against the live database.
 
     Args:
@@ -47,12 +47,16 @@ async def run_refresh(db_name: str = None) -> dict:
     """
     setup_langsmith()
 
+    if not os.getenv("GEMINI_API_KEY"):
+        raise EnvironmentError("GEMINI_API_KEY is not set — cannot build LLM clients")
+
     from database import connect_to_mongo, close_mongo_connection
     from services.scraper import get_scraper_service
 
     await connect_to_mongo()
 
     run_id = str(uuid.uuid4())
+    logger.info("Refresh starting", extra={"event": "refresh_start", "run_id": run_id})
     cost_tracker = CostTracker(budget_usd=MAX_COST_USD)
 
     # Curator ranker — cheapest Gemini tier for ranking, not extraction
@@ -63,37 +67,49 @@ async def run_refresh(db_name: str = None) -> dict:
         google_api_key=os.getenv("GEMINI_API_KEY"),
     )
 
-    subgraph = build_extraction_subgraph(
-        scraper=get_scraper_service(),
-        model_factory=ModelFactory(),
-        cost_tracker=cost_tracker,
-        system_prompt_builder=build_extraction_system_prompt,
-    )
-
-    resolved_db_name = db_name or os.getenv("DATABASE_NAME", "equitable")
-
-    async with mongo_checkpointer(db_name=resolved_db_name) as cp:
-        app = build_refresh_graph(
-            load_node=make_load_sources_node(),
-            curator_node=make_curator_node(ranker=make_llm_ranker(curator_chat)),
-            subgraph=subgraph,
+    try:
+        subgraph = build_extraction_subgraph(
+            scraper=get_scraper_service(),
+            model_factory=ModelFactory(),
             cost_tracker=cost_tracker,
-            update_metrics_node=make_update_metrics_node(),
-            checkpointer=cp,
-        )
-        final = await app.ainvoke(
-            {"run_id": run_id, "cost_budget_usd": MAX_COST_USD},
-            {"configurable": {"thread_id": run_id}},
+            system_prompt_builder=build_extraction_system_prompt,
         )
 
-    await close_mongo_connection()
+        resolved_db_name = db_name or os.getenv("DATABASE_NAME", "equitable")
+
+        async with mongo_checkpointer(db_name=resolved_db_name) as cp:
+            app = build_refresh_graph(
+                load_node=make_load_sources_node(),
+                curator_node=make_curator_node(ranker=make_llm_ranker(curator_chat)),
+                subgraph=subgraph,
+                cost_tracker=cost_tracker,
+                update_metrics_node=make_update_metrics_node(),
+                checkpointer=cp,
+            )
+            final = await app.ainvoke(
+                {"run_id": run_id, "cost_budget_usd": MAX_COST_USD},
+                {"configurable": {"thread_id": run_id}},
+            )
+    except Exception:
+        logger.exception("Refresh run failed", extra={"event": "refresh_error", "run_id": run_id})
+        raise
+    finally:
+        await close_mongo_connection()
+
+    results = final.get("results", [])
+    succeeded = sum(1 for r in results if r.get("outcome") == "success")
+    failed = sum(1 for r in results if r.get("outcome") == "failed")
+    skipped = sum(1 for r in results if r.get("outcome") == "skipped_budget")
     logger.info(
         "Refresh complete",
         extra={
             "event": "refresh_done",
             "run_id": run_id,
-            "processed": len(final.get("results", [])),
-            "cost_spent_usd": round(cost_tracker.spent_usd, 4),
+            "processed": len(results),
+            "succeeded": succeeded,
+            "failed": failed,
+            "skipped_budget": skipped,
+            "cost_spent_usd": round(final.get("cost_spent_usd", 0.0), 4),
         },
     )
     return final
@@ -102,7 +118,16 @@ async def run_refresh(db_name: str = None) -> dict:
 def main() -> None:
     """Synchronous entry point — used by `python -m agent.refresh`."""
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(run_refresh())
+    try:
+        final = asyncio.run(run_refresh())
+    except Exception:
+        logger.exception("Refresh run failed", extra={"event": "refresh_error"})
+        raise SystemExit(1)
+    results = final.get("results", [])
+    failed = sum(1 for r in results if r.get("outcome") == "failed")
+    if results and failed == len(results):
+        logger.error("All sources failed", extra={"event": "refresh_all_failed", "failed": failed})
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

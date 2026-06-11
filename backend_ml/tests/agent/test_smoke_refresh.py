@@ -86,6 +86,8 @@ async def test_refresh_smoke(test_db):
 
     tracker = CostTracker(budget_usd=1.0)
     factory = FakeModelFactory([
+        # One scripted entry is enough: FakeStructuredModel clamps/round-robins to its
+        # last entry, so this single ExtractionResult serves all 5 pantry invocations.
         FakeStructuredModel(scripted=[ExtractionResult(**GOOD)])
     ])
     sub = build_extraction_subgraph(
