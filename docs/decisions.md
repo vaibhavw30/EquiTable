@@ -319,6 +319,154 @@ A fallback polling endpoint (`GET /discover/status/{job_id}`) is provided for cl
 
 ---
 
+## ADR-015: LangSmith for Agent Observability
+
+**Date**: 2026-06-11
+**Status**: Accepted
+
+**Context**: The LangGraph refresh agent needs end-to-end tracing of node executions, state transitions, token counts, and latency. The live API path previously had a Braintrust auto-instrument block in `main.py`, but that code was uncommitted work-in-progress and was discarded before this agent was built — so there is no "switch" from Braintrust; the agent is starting fresh. The live `/pantries/{id}/ingest` endpoint does not use LangChain, so it would require manual instrumentation under any observability system. Instrumenting the live path is explicitly out of scope for this agent build.
+
+**Options Considered**:
+| Criteria | LangSmith | Braintrust | Custom logging (structured JSON) |
+|----------|-----------|------------|----------------------------------|
+| LangGraph auto-tracing | Yes (native integration) | No (requires manual spans) | No |
+| Node/edge/state visibility | Yes (built-in) | Manual | Manual |
+| Token counts + cost | Auto from usage_metadata | Manual | Manual |
+| Free tier | Generous | Yes | N/A |
+| Setup effort | Env vars only | SDK + wrappers | Significant |
+
+**Decision**: LangSmith. `agent/config.py` exposes `setup_langsmith()`, which sets `LANGCHAIN_TRACING_V2=true` and `LANGCHAIN_PROJECT=equitable-refresh-agent` when a `LANGCHAIN_API_KEY` or `LANGSMITH_API_KEY` is present in the environment. This is a no-op when the keys are absent (safe in dev/CI without secrets). LangGraph automatically traces every node, edge, and state snapshot — zero glue code required.
+
+**Consequences**:
+
+- Requires a LangSmith account with an API key (`LANGCHAIN_API_KEY`) — the free tier is sufficient.
+- The live `/pantries/{id}/ingest` endpoint is not instrumented (it does not go through LangChain). Re-instrumenting the live path is a separate concern and can be revisited later.
+- Traces are visible in the LangSmith UI under the project `equitable-refresh-agent`, including per-node latency, input/output state, and token usage.
+
+**Re-evaluation trigger**: If the live path grows complex enough to warrant observability, evaluate adding LangSmith manual spans or a lightweight structured-logging alternative to the existing `docs/error_monitoring.md` patterns.
+
+---
+
+## ADR-016: LangGraph for Agent Orchestration
+
+**Date**: 2026-06-11
+**Status**: Accepted
+
+**Context**: The refresh agent needs a directed state machine with: a conditional retry/escalation loop inside a per-source extraction flow, fan-out across multiple sources, and a curator stage before the fan-out. The existing live discovery path already does async parallel scraping (`asyncio.Semaphore`, `asyncio.gather`) but has no retry loop, no source prioritization, and no model routing — the live path is demand-driven and latency-sensitive, which makes those additions inappropriate there. The refresh agent is a background batch job where latency is acceptable. A secondary motivation is demonstrating production agent-engineering patterns (state machines, subgraph composition, conditional edges) — deliberate even where a plain async implementation would meet the functional need.
+
+**Options Considered**:
+| Criteria | LangGraph | Plain asyncio (extend existing) | CrewAI / AutoGen |
+|----------|-----------|----------------------------------|------------------|
+| Conditional retry edges | Native (add_conditional_edges) | Manual (while loop) | Framework-specific |
+| Subgraph composition/reuse | Native | Custom wiring | Limited |
+| Durable checkpointing | Native (pluggable backends) | Not built-in | Not built-in |
+| LangSmith auto-tracing | Native | No | Partial |
+| Learning signal | High | Low | Medium |
+| Overhead | Small (state dicts) | Minimal | High (agent abstractions) |
+
+**Decision**: LangGraph. The parent graph topology is `load_sources → curator → process_sources (fan-out) → aggregate_report → update_metrics`. The per-source extraction is assembled as a **reusable subgraph** (`scrape → extract → validate → [retry loop | persist]`) so it can later be composed into other pipelines (e.g., the live discovery path) without rewriting. The `should_retry` conditional edge feeds validation failures and low-confidence signals back to the extract node with escalated model tier. Installed versions: langgraph 1.2.4, langchain-core 1.4.6, langchain-google-genai 4.2.5.
+
+**Consequences**:
+
+- New dependencies: `langgraph>=1.2`, `langchain-core>=1.4`, `langchain-google-genai>=4.2`, `langsmith>=0.8` added to `requirements.txt`.
+- State is typed (`ParentState`, `ExtractionState` as TypedDicts; `ExtractionResult` as a Pydantic model for structured LLM output).
+- The live path (`services/discovery_service.py`, `services/ingestion_pipeline.py`) is untouched — the agent is additive, not a rewrite.
+- The extraction subgraph is designed so its `scrape → extract → validate` core can be dropped into the live path later without a graph rewrite.
+
+---
+
+## ADR-017: Standalone Scheduled Refresh Job + Curator Multi-Agent Architecture
+
+**Date**: 2026-06-11
+**Status**: Accepted
+
+**Context**: Pantry hours and status go stale — `docs/seed_strategy.md` already calls for a freshness policy. Two places could host a refresh capability: (1) the existing live discovery path (`services/discovery_service.py`), or (2) a new standalone background job. The curator agent ranks sources by reliability and staleness history, which only exists for pantries already in the database — brand-new URLs from live discovery have no history to rank on. The live path is latency-sensitive (users wait for SSE results), and adding retry loops, model escalation, and LLM-based curation there would increase latency and complexity without benefit. Deploying a standalone job keeps the live API untouched and preserves its current performance characteristics.
+
+**Decision**: Standalone background refresh job (`backend_ml/agent/`, runnable as `python -m agent.refresh`). The job:
+
+1. `load_sources` — queries pantries with `source_url` present and `last_updated` older than `FRESHNESS_FLOOR_HOURS` (24 h), joining `source_metrics` history.
+2. `curator` — quarantines sources with `consecutive_failures > QUARANTINE_THRESHOLD` (5), then ranks the rest by staleness, reliability, and city diversity (LLM ranker using `gemini-2.0-flash-lite`; deterministic staleness fallback on cold start or ranker failure).
+3. `process_sources` — async fan-out (semaphore cap `MAX_CONCURRENT=4`) over the curator's selection, each running the extraction subgraph.
+4. `aggregate_report` + `update_metrics` — write per-source metrics to the new `source_metrics` collection.
+
+The live path (`/discover`, `/pantries/{id}/ingest`) is not modified. Onboarding brand-new URLs stays with `scripts/seed_cities.py`. Deployment to AWS Fargate + EventBridge is covered separately (ADR-019, deferred to the deployment plan).
+
+**Consequences**:
+
+- New `source_metrics` collection in MongoDB Atlas (unique index on `source_url`) tracks per-source run history (successes, failures, consecutive failures, success rate, avg latency, last model used).
+- Quarantined sources (chronic failures) are surfaced in the run report for manual review rather than silently skipped.
+- Cold-start behavior (no metrics yet) falls back to pure staleness ordering — the job is immediately useful from the first run.
+- The curator's LLM ranker is optional and fails gracefully; the job never crashes due to a ranker error.
+
+---
+
+## ADR-018: Cheap-First Model Escalation and Per-Run Cost Budget
+
+**Date**: 2026-06-11
+**Status**: Accepted
+
+**Context**: The refresh agent makes one or more Gemini calls per source. Without cost controls, a run over 25 sources with multiple retries each could spend an unpredictable amount. The existing live extractor always uses `gemini-2.0-flash` (ADR-003); for a background batch job, starting cheaper and escalating only on failure is cost-optimal. A per-run dollar budget provides a hard backstop for runaway spend.
+
+**Options Considered**:
+| Criteria | Single model (always Flash) | Cheap-first ladder + budget | Per-source cost limit |
+|----------|----------------------------|-----------------------------|-----------------------|
+| Cost efficiency | Moderate | High (cheap-first) | Moderate |
+| Quality recovery | None | Escalates on failure | None |
+| Budget enforcement | None | Yes (soft cap) | Partial |
+| Configuration complexity | Low | Low (config constants) | Medium |
+
+**Decision**: Three-rung cheap-first ladder with per-retry escalation, plus a per-run `MAX_COST_USD` budget (default $0.50/run):
+
+| Attempt | Model |
+|---------|-------|
+| Initial (tier 0) | `gemini-2.0-flash-lite` |
+| Retry 1 (tier 1) | `gemini-2.0-flash` |
+| Retry 2 (tier 2) | `gemini-2.5-flash` |
+
+Escalation triggers on validation failure **or** `confidence < CONFIDENCE_THRESHOLD` (6), up to `MAX_RETRIES=2` (3 total attempts). The curator uses `gemini-2.0-flash-lite` (ranking is a lightweight task). A `CostTracker` accumulates `tokens × per-model price` (thread-safe) and is checked before admitting each source in the fan-out.
+
+**Important: the per-run budget is a soft cap under concurrency.** Because the budget gate is checked inside the semaphore slot before a source's subgraph runs — and up to `MAX_CONCURRENT` (4) sources can be admitted before any of them have completed and recorded cost — the realized spend can exceed `MAX_COST_USD` by at most `MAX_CONCURRENT × max-per-source-cost` before the remaining queued sources are marked `skipped_budget`. In-flight subgraphs are always allowed to complete. For a batch job expected to cost ~$1–2/month, this overshoot is acceptable; a hard cap would require cost reservation (intentionally not built).
+
+**Consequences**:
+
+- `MODEL_PRICING` constants in `agent/config.py` must be kept current as Google adjusts Gemini pricing — they are the source of truth for all cost accounting.
+- Retrying on low confidence (not just hard validation failures) spends tokens on inherently sparse pages that may not improve. The per-run budget is the backstop that prevents runaway spend on these sources.
+- Remaining sources that would exceed the budget are skipped (outcome `skipped_budget`) and reported in the run summary; they will be candidates again in the next run.
+
+**Re-evaluation trigger**: If `MODEL_PRICING` drifts more than 20% from actual billing, update the constants. If the soft-cap overshoot ever causes a budget concern, implement cost reservation before the semaphore admit.
+
+---
+
+## ADR-020: MongoDB-Backed LangGraph Checkpointer
+
+**Date**: 2026-06-11
+**Status**: Accepted
+
+**Context**: A daily refresh run over 25 sources with up to 3 extraction attempts each takes several minutes. If the process crashes mid-run (OOM, transient network error, container preemption), restarting from scratch wastes tokens and time. LangGraph's checkpointer protocol allows graph state to be persisted after each node completion so that a resumed run picks up where it left off. The agent already uses MongoDB Atlas (ADR-002), making it the natural checkpoint backend — no additional managed service required.
+
+**Options Considered**:
+| Criteria | MongoDB (Atlas, existing) | Redis | SQLite (local file) | In-memory (no persistence) |
+|----------|--------------------------|-------|---------------------|-----------------------------|
+| Durability | Yes (Atlas replication) | Yes | File only | No |
+| Resume-on-crash | Yes | Yes | Partial | No |
+| Additional service | No (already provisioned) | Yes ($) | No | No |
+| LangGraph integration | langgraph-checkpoint-mongodb | langgraph-checkpoint-redis | langgraph-checkpoint-sqlite | Built-in (MemorySaver) |
+| Time-travel debugging | Yes (thread_id lookup) | Yes | Yes | No |
+
+**Decision**: `langgraph-checkpoint-mongodb` (version 0.4.0) backed by MongoDB Atlas. `thread_id` is set to the `run_id` (a UUID generated at the start of each run), so each daily run has an isolated checkpoint namespace. Checkpoint collections are written to the same database as the pantries collection.
+
+**Important implementation detail**: `langgraph-checkpoint-mongodb` 0.4.0 ships only a **synchronous** `MongoDBSaver` — there is no `AsyncMongoDBSaver` and no `.aio` submodule. `MongoDBSaver` exposes async-compatible methods (`aget_tuple`, `aput`, `aput_writes`) that delegate to `run_in_executor` internally, so the event loop is not blocked. The `from_conn_string` class method is a synchronous `@contextmanager`. `agent/checkpointer.py` wraps it in an `@asynccontextmanager` — entering the synchronous context manager with a plain `with` block, then yielding the saver to async callers — so the rest of the codebase uses a uniform `async with mongo_checkpointer() as cp:` API.
+
+**Consequences**:
+
+- LangGraph checkpoint collections (`checkpoints`, `checkpoint_writes`, `checkpoint_migrations`) are created automatically in the same Atlas database.
+- A resumed run (same `thread_id`) restores state after the last completed node and does not reprocess already-persisted sources. Combined with the freshness floor (24 h), re-runs are naturally idempotent.
+- The synchronous-only saver is compatible with LangGraph 1.2.x — if a future `langgraph-checkpoint-mongodb` version ships a true async saver, the `asynccontextmanager` wrapper in `checkpointer.py` can be simplified without changing callers.
+
+**Re-evaluation trigger**: If `langgraph-checkpoint-mongodb` releases an async saver, simplify `checkpointer.py`. If checkpoint storage grows large over time, add a TTL index on the checkpoint collections (checkpoints older than 7 days can be dropped safely).
+
+---
+
 ## Template for New Decisions
 
 ```markdown
