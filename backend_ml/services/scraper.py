@@ -14,6 +14,7 @@ Firecrawl remains available as a dormant fallback (not imported at runtime).
 import logging
 import re
 import time
+from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -78,6 +79,14 @@ _FOOD_PATH_PATTERNS = [
 
 MAX_AGGREGATE_CHARS = 30_000
 
+MIN_CONTENT_CHARS = 200   # below this, Crawl4AI output is "insufficient" → fallback
+
+
+@dataclass
+class ScrapeResult:
+    content: Optional[str]
+    method: str            # "crawl4ai" | "jina" | "firecrawl" | "none"
+
 
 def food_relevance_score(markdown: str) -> float:
     """
@@ -113,7 +122,7 @@ class ScraperService:
 
     RELEVANCE_THRESHOLD = 0.7
 
-    def __init__(self):
+    def __init__(self, fallback_fetchers: Optional[list] = None):
         self._browser_config = BrowserConfig(
             headless=True,
             verbose=False,
@@ -123,6 +132,10 @@ class ScraperService:
             exclude_external_links=True,
             remove_overlay_elements=True,
         )
+        if fallback_fetchers is None:
+            from services.fallback_fetcher import build_default_fallback_chain
+            fallback_fetchers = build_default_fallback_chain()
+        self._fallbacks = fallback_fetchers
 
     def _build_deep_strategy(self, url: str) -> BFSDeepCrawlStrategy:
         """Build a BFS deep crawl strategy scoped to the root domain."""
@@ -194,9 +207,9 @@ class ScraperService:
 
         return "".join(sections).strip() if sections else None
 
-    async def scrape_url(self, url: str) -> Optional[str]:
+    async def _crawl4ai_scrape(self, url: str) -> Optional[str]:
         """
-        Scrape a URL and return its main content as Markdown.
+        Scrape a URL and return its main content as Markdown using Crawl4AI.
 
         Two-phase approach:
           1. Shallow scrape of root URL
@@ -295,6 +308,32 @@ class ScraperService:
                        "error": str(e), "duration_ms": duration_ms},
             )
             return None
+
+    async def scrape_with_provenance(self, url: str) -> ScrapeResult:
+        """Crawl4AI first; fall back through the chain; report which tool won."""
+        primary = await self._crawl4ai_scrape(url)
+        if primary and len(primary.strip()) >= MIN_CONTENT_CHARS:
+            return ScrapeResult(primary, "crawl4ai")
+
+        for fetcher in self._fallbacks:
+            if not getattr(fetcher, "enabled", True):
+                continue
+            logger.info("Trying fallback fetcher",
+                        extra={"event": "fallback_attempt", "url": url, "tool": fetcher.name})
+            content = await fetcher.fetch(url)
+            if content and len(content.strip()) >= MIN_CONTENT_CHARS:
+                logger.info("Fallback succeeded",
+                            extra={"event": "fallback_success", "url": url,
+                                   "tool": fetcher.name, "content_length": len(content)})
+                return ScrapeResult(content, fetcher.name)
+
+        if primary and primary.strip():       # some content, just under threshold
+            return ScrapeResult(primary, "crawl4ai")
+        return ScrapeResult(None, "none")
+
+    async def scrape_url(self, url: str) -> Optional[str]:
+        """Backward-compatible wrapper (live pipeline uses this)."""
+        return (await self.scrape_with_provenance(url)).content
 
 
 # Singleton instance for reuse

@@ -6,7 +6,7 @@ All tests use mocked Crawl4AI — no live HTTP calls.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from services.scraper import ScraperService, food_relevance_score
+from services.scraper import ScraperService, ScrapeResult, MIN_CONTENT_CHARS, food_relevance_score
 
 
 # Default markdown with food signals so existing tests trigger early-exit (no deep crawl)
@@ -53,7 +53,7 @@ def _make_crawler_mock(results):
 class TestScraperService:
     @pytest.fixture
     def scraper(self):
-        return ScraperService()
+        return ScraperService(fallback_fetchers=[])
 
     @pytest.mark.asyncio
     async def test_returns_markdown_on_success(self, scraper):
@@ -167,7 +167,7 @@ class TestFoodRelevanceScoring:
 class TestDeepScraping:
     @pytest.fixture
     def scraper(self):
-        return ScraperService()
+        return ScraperService(fallback_fetchers=[])
 
     @pytest.mark.asyncio
     async def test_deep_crawl_triggered_on_low_relevance(self, scraper):
@@ -301,3 +301,84 @@ class TestDeepScraping:
 
         assert result is None
         mock_strategy_builder.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Provenance + fallback chain tests (Task 2)
+# ---------------------------------------------------------------------------
+
+class _SpyFetcher:
+    def __init__(self, name, result):
+        self.name = name
+        self.enabled = True
+        self.result = result
+        self.called = False
+
+    async def fetch(self, url):
+        self.called = True
+        return self.result
+
+
+async def test_crawl4ai_sufficient_skips_fallback(monkeypatch):
+    spy = _SpyFetcher("jina", "should not be used")
+    svc = ScraperService(fallback_fetchers=[spy])
+    rich = "x" * (MIN_CONTENT_CHARS + 50)
+
+    async def fake_primary(url):
+        return rich
+
+    monkeypatch.setattr(svc, "_crawl4ai_scrape", fake_primary)
+    res = await svc.scrape_with_provenance("https://x.org")
+    assert res.method == "crawl4ai" and res.content == rich
+    assert spy.called is False
+
+
+async def test_falls_back_to_jina_when_crawl4ai_empty(monkeypatch):
+    content = "y" * (MIN_CONTENT_CHARS + 10)
+    spy = _SpyFetcher("jina", content)
+    svc = ScraperService(fallback_fetchers=[spy])
+
+    async def fake_primary(url):
+        return "\n"        # the real bug shape
+
+    monkeypatch.setattr(svc, "_crawl4ai_scrape", fake_primary)
+    res = await svc.scrape_with_provenance("https://x.org")
+    assert res.method == "jina" and res.content == content
+    assert spy.called is True
+
+
+async def test_all_fail_returns_none(monkeypatch):
+    spy = _SpyFetcher("jina", None)
+    svc = ScraperService(fallback_fetchers=[spy])
+
+    async def fake_primary(url):
+        return None
+
+    monkeypatch.setattr(svc, "_crawl4ai_scrape", fake_primary)
+    res = await svc.scrape_with_provenance("https://x.org")
+    assert res.content is None and res.method == "none"
+
+
+async def test_scrape_url_wrapper_returns_string(monkeypatch):
+    svc = ScraperService(fallback_fetchers=[])
+    rich = "z" * (MIN_CONTENT_CHARS + 1)
+
+    async def fake_primary(url):
+        return rich
+
+    monkeypatch.setattr(svc, "_crawl4ai_scrape", fake_primary)
+    assert await svc.scrape_url("https://x.org") == rich
+
+
+async def test_thin_crawl4ai_content_preferred_over_nothing(monkeypatch):
+    """If Crawl4AI returns a tiny amount but all fallbacks return None, prefer thin content."""
+    thin = "a" * (MIN_CONTENT_CHARS - 10)   # under threshold but not empty
+    spy = _SpyFetcher("jina", None)
+    svc = ScraperService(fallback_fetchers=[spy])
+
+    async def fake_primary(url):
+        return thin
+
+    monkeypatch.setattr(svc, "_crawl4ai_scrape", fake_primary)
+    res = await svc.scrape_with_provenance("https://x.org")
+    assert res.content == thin and res.method == "crawl4ai"
