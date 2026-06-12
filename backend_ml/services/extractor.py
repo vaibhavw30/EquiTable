@@ -117,7 +117,7 @@ class ExtractorService:
             user_message = f"Extract structured food pantry information from this scraped webpage content:\n\n{markdown}"
 
             response = self._client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-3.5-flash",
                 contents=user_message,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,

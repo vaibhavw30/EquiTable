@@ -7,30 +7,54 @@ pricing before relying on cost numbers; they drift over time.
 
 import os
 
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 # ── Refresh-run knobs ─────────────────────────────────────────────────────
-FRESHNESS_FLOOR_HOURS: int = 24      # only pantries staler than this are candidates
-MAX_SOURCES_PER_RUN: int = 25        # curator selects at most this many per run
+FRESHNESS_FLOOR_HOURS: int = _env_int("REFRESH_FRESHNESS_HOURS", 24)   # only pantries staler than this are candidates
+MAX_SOURCES_PER_RUN: int = _env_int("REFRESH_MAX_SOURCES", 25)          # curator selects at most this many per run
 MAX_CONCURRENT: int = 4              # concurrent extraction subgraphs
 CONFIDENCE_THRESHOLD: int = 6        # confidence below this triggers a retry
 MAX_RETRIES: int = 2                 # retries after the initial attempt (3 attempts total)
 QUARANTINE_THRESHOLD: int = 5        # consecutive_failures above this → skip + report
-MAX_COST_USD: float = 0.50           # per-run dollar budget
+MAX_COST_USD: float = _env_float("REFRESH_MAX_COST_USD", 0.50)  # per-run dollar budget
 
 # ── Model ladder (cheap-first with escalation) ────────────────────────────
 # Index 0 = initial attempt, escalating per retry. The last rung is reused
 # if retries exceed the ladder length.
 EXTRACTION_MODEL_LADDER: list[str] = [
-    "gemini-2.0-flash-lite",
-    "gemini-2.0-flash",
-    "gemini-2.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.1-pro-preview",
 ]
-CURATOR_MODEL: str = "gemini-2.0-flash-lite"
+CURATOR_MODEL: str = "gemini-3.1-flash-lite"
 
 # ── Pricing: model -> (input_per_1M, output_per_1M) in USD ────────────────
+# Approximate Gemini 3 pricing — VERIFY against current rates (the docstring
+# note applies). A missing key silently costs $0, so keep this in sync with
+# EXTRACTION_MODEL_LADDER + CURATOR_MODEL.
 MODEL_PRICING: dict[str, tuple[float, float]] = {
-    "gemini-2.0-flash-lite": (0.075, 0.30),
-    "gemini-2.0-flash": (0.10, 0.40),
-    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-3.1-flash-lite": (0.10, 0.40),
+    "gemini-3.5-flash": (0.30, 2.50),
+    "gemini-3.1-pro-preview": (1.25, 10.00),
 }
 
 
