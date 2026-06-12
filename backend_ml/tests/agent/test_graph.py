@@ -76,8 +76,8 @@ async def test_budget_crosses_midrun_skips_remainder(test_db):
 
     tracker = CostTracker(budget_usd=0.50)
 
-    # Compute N so that one call spends exactly ~$0.20 using gemini-2.0-flash input pricing
-    in_price_per_1m, _ = MODEL_PRICING["gemini-2.0-flash"]   # 0.10 USD/1M tokens
+    # Compute N so that one call spends exactly ~$0.20 using gemini-3.5-flash input pricing
+    in_price_per_1m, _ = MODEL_PRICING["gemini-3.5-flash"]   # 0.30 USD/1M tokens
     per_call_usd = 0.20
     n_input_tokens = math.ceil(per_call_usd / (in_price_per_1m / 1_000_000))
 
@@ -87,7 +87,7 @@ async def test_budget_crosses_midrun_skips_remainder(test_db):
             self._tracker = cost_tracker
 
         async def ainvoke(self, state: dict) -> dict:
-            self._tracker.add_usage("gemini-2.0-flash",
+            self._tracker.add_usage("gemini-3.5-flash",
                                     input_tokens=n_input_tokens,
                                     output_tokens=0)
             return {
