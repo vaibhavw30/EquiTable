@@ -16,9 +16,16 @@ class _FakeDB:
 async def test_over_budget_skips_without_api_call(monkeypatch):
     coll = _FakeColl(count=400)
     f = FirecrawlFetcher(api_key="k", monthly_budget=400, db_getter=lambda: _FakeDB(coll))
-    # If it tried to import/call the SDK we'd know; assert it returns None and never increments
+
+    # Hard proof of the no-pay guarantee: if the budget gate were inverted and
+    # the SDK were ever touched over budget, this raises and fails the test.
+    import services.firecrawl_fetcher as mod
+    def _explode():
+        raise AssertionError("SDK invoked while over budget — would incur a charge")
+    monkeypatch.setattr(mod, "_import_async_firecrawl", _explode)
+
     assert await f.fetch("https://x.org") is None
-    assert coll.inc_called is False
+    assert coll.inc_called is False        # never billed/counted
 
 
 async def test_no_key_returns_none():
