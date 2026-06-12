@@ -308,9 +308,9 @@ class TestDeepScraping:
 # ---------------------------------------------------------------------------
 
 class _SpyFetcher:
-    def __init__(self, name, result):
+    def __init__(self, name, result, enabled=True):
         self.name = name
-        self.enabled = True
+        self.enabled = enabled
         self.result = result
         self.called = False
 
@@ -382,3 +382,20 @@ async def test_thin_crawl4ai_content_preferred_over_nothing(monkeypatch):
     monkeypatch.setattr(svc, "_crawl4ai_scrape", fake_primary)
     res = await svc.scrape_with_provenance("https://x.org")
     assert res.content == thin and res.method == "crawl4ai"
+
+
+async def test_disabled_fetcher_is_skipped(monkeypatch):
+    """A fetcher with enabled=False must be skipped; the enabled one must win."""
+    content = "z" * (MIN_CONTENT_CHARS + 20)
+    disabled_spy = _SpyFetcher("disabled_tool", content, enabled=False)
+    enabled_spy = _SpyFetcher("enabled_tool", content, enabled=True)
+    svc = ScraperService(fallback_fetchers=[disabled_spy, enabled_spy])
+
+    async def fake_primary(url):
+        return "\n"  # insufficient — forces fallback chain
+
+    monkeypatch.setattr(svc, "_crawl4ai_scrape", fake_primary)
+    res = await svc.scrape_with_provenance("https://x.org")
+    assert disabled_spy.called is False           # disabled fetcher never invoked
+    assert enabled_spy.called is True             # enabled fetcher was used
+    assert res.method == "enabled_tool"

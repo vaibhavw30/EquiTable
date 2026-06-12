@@ -1,14 +1,14 @@
 """
 Scraper Service - Uses Crawl4AI to extract main content from pantry websites.
 
-Crawl4AI is the primary scraper (ADR-008). It is async-native, free,
-and produces LLM-optimized Markdown output.
+Crawl4AI is the primary scraper (ADR-008/ADR-021): async-native, free,
+LLM-optimized Markdown. When it returns < MIN_CONTENT_CHARS, a pluggable
+fallback chain is tried — default [Jina Reader] (free); optional capped
+Firecrawl tier (off by default). See `services/fallback_fetcher.py`.
 
 Two-phase scraping:
   Phase 1: Shallow scrape of the root URL (~3-5s)
   Phase 2: BFS deep crawl if root lacks food-pantry content (~10-15s extra)
-
-Firecrawl remains available as a dormant fallback (not imported at runtime).
 """
 
 import logging
