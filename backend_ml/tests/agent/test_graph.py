@@ -149,6 +149,11 @@ class _SelectiveScraper:
             return "# Pantry\nRETRYFAIL — always invalid"
         return "# Pantry\nMon-Fri 9am-5pm. No ID required. Open to all."
 
+    async def scrape_with_provenance(self, url: str):
+        from services.scraper import ScrapeResult
+        md = await self.scrape_url(url)
+        return ScrapeResult(md, "crawl4ai" if md else "none")
+
 
 class _MarkerModel:
     """Structured-output model whose behaviour depends on message content.
