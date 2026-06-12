@@ -19,6 +19,20 @@ client: AsyncIOMotorClient = None
 db = None
 
 
+def _mongo_client_kwargs() -> dict:
+    """Apply TLS only for Atlas/SRV URIs.
+
+    Atlas (mongodb+srv://) requires TLS with a CA bundle. A local/dev MongoDB
+    (plain mongodb://) speaks plaintext, so passing tlsCAFile there forces a
+    TLS handshake the server can't satisfy. Gate on the URI shape so the app
+    runs against both Atlas and a local container. Mirrors tests/conftest.py.
+    """
+    uri = (MONGO_URI or "").lower()
+    if "mongodb+srv" in uri or "mongodb.net" in uri or "tls=true" in uri or "ssl=true" in uri:
+        return {"tlsCAFile": certifi.where()}
+    return {}
+
+
 async def connect_to_mongo():
     """Create database connection on startup"""
     global client, db
@@ -26,7 +40,7 @@ async def connect_to_mongo():
     if not MONGO_URI:
         raise ValueError("MONGO_URI environment variable is not set")
 
-    client = AsyncIOMotorClient(MONGO_URI, tlsCAFile=certifi.where())
+    client = AsyncIOMotorClient(MONGO_URI, **_mongo_client_kwargs())
     db = client[DATABASE_NAME]
 
     # Verify connection by pinging the server
