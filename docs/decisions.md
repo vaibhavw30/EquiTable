@@ -164,7 +164,7 @@ This document tracks significant technology and architecture decisions for EquiT
 ## ADR-008: Crawl4AI as Primary Scraper (Supersedes ADR-004)
 
 **Date**: 2026-02-14
-**Status**: Accepted
+**Status**: Accepted — superseded in part by ADR-021 (free fallback promoted)
 
 **Context**: ADR-004 marked Firecrawl as "Under Re-evaluation" for Phase 2. With multi-city expansion approaching, we need a scraping solution that is: (a) cost-effective at >1000 scrapes/day, (b) async-native for our FastAPI stack, (c) produces clean Markdown for LLM extraction. The current Firecrawl integration is synchronous (blocking the event loop), costs $0.001/page (scaling to $30+/mo), and is the sole point of failure.
 
@@ -466,6 +466,28 @@ Escalation triggers on validation failure **or** `confidence < CONFIDENCE_THRESH
 **Re-evaluation trigger**: If `langgraph-checkpoint-mongodb` releases an async saver, simplify `checkpointer.py`. If checkpoint storage grows large over time, add a TTL index on the checkpoint collections (checkpoints older than 7 days can be dropped safely).
 
 **Resume-granularity limitation (honest note)**: LangGraph checkpointing operates at superstep/node granularity. Because the entire per-source fan-out is encapsulated inside the single `process_sources` node, a crash mid-fan-out resumes by re-executing that whole node — re-scraping all selected sources for that run. This is **safe**: the per-source upserts are idempotent (keyed on `source_url`) and the 24 h freshness floor means re-refreshed sources are simply no-ops on the next scheduled run. There is no risk of duplicate or clobbered data. However, it is re-work, not per-source incremental resume. True per-source resume would require modeling each source as its own LangGraph branch via the Send API — intentionally deferred because the complexity is not justified for a once-daily batch job at current scale.
+
+---
+
+## ADR-021: Jina Reader as the Free Scraper Fallback (Refines ADR-008)
+
+**Date**: 2026-06-11
+**Status**: Accepted
+
+**Context**: Crawl4AI 0.8.9 returns empty markdown on JS/anti-bot pantry sites — verified: 1-character output on two live production sites, even with JS-wait tuning, native and emulated browser modes. The project requires zero scraping cost (ADR-008 premise). Firecrawl (ADR-008's intended fallback) is paid and cannot be the default.
+
+**Decision**: Add a pluggable fallback chain in `ScraperService`. When Crawl4AI yields `< MIN_CONTENT_CHARS` (200 characters), the chain is tried in order. The default chain is `[JinaReaderFetcher]` — Jina Reader (`r.jina.ai`) is free (IP-rate-limited, no signup required), renders JavaScript server-side, and has been verified to recover the failing sites. Firecrawl (ADR-008's intended fallback) is retained as an **opt-in, hard-capped** secondary fetcher that defaults off (`FIRECRAWL_FALLBACK_ENABLED=false`), so the standard deployment configuration costs $0 for scraping. The public `scrape_url(url) -> Optional[str]` interface is fully preserved so the live discovery path requires no changes; a new `scrape_with_provenance(url) -> ScrapeResult` method returns `(content, method)` so the refresh agent can record which tool won. The `scrape_method` field is threaded through agent state (`ExtractionState`) and written to the pantry document by the persist node.
+
+**Consequences**:
+
+- New `services/fallback_fetcher.py` module: `FallbackFetcher` protocol, `JinaReaderFetcher`, `build_default_fallback_chain`, `_bool_env`.
+- New `services/firecrawl_fetcher.py` module: `FirecrawlFetcher` with a persistent monthly counter in the `scraper_usage` MongoDB collection — the counter is only written when `FIRECRAWL_FALLBACK_ENABLED=true`, so no new collection is created in the default configuration.
+- `firecrawl-py` bumped to `>=4.0` (v2 SDK) in `requirements.txt`.
+- `ScrapeResult` dataclass and `MIN_CONTENT_CHARS` constant added to `scraper.py`; `scrape_url` is now a thin backward-compatible wrapper over `scrape_with_provenance`.
+- `scrape_method` added to `ExtractionState`; persist node records it on every pantry document write.
+- An optional `JINA_API_KEY` raises Jina's rate limit but is never required.
+
+**Re-evaluation trigger**: If Jina rate limits or output quality become inadequate for multi-city seeding volume, reorder the chain (promote capped Firecrawl) or enable a second free reader. If a native async `AsyncMongoDBSaver` lands in `langgraph-checkpoint-mongodb`, revisit whether the `scraper_usage` counter collection should instead be tracked in LangGraph checkpoint state.
 
 ---
 

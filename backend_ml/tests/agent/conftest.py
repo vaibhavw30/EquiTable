@@ -61,9 +61,14 @@ class FakeModelFactory:
 
 
 class FakeScraper:
-    """Mimics ScraperService.scrape_url."""
+    """Mimics ScraperService.scrape_url and scrape_with_provenance."""
     def __init__(self, markdown="# Pantry\nMon-Fri 9am-5pm. No ID required."):
         self._markdown = markdown
 
     async def scrape_url(self, url):
         return self._markdown
+
+    async def scrape_with_provenance(self, url):
+        from services.scraper import ScrapeResult
+        md = await self.scrape_url(url)
+        return ScrapeResult(md, "crawl4ai" if md else "none")

@@ -27,6 +27,7 @@ class ExtractionState(TypedDict, total=False):
     retry_count: int
     model_tier: int
     latency_ms: float
+    scrape_method: Optional[str]
     outcome: Literal["success", "failed", "skipped_budget"]
     final_update: Optional[dict]
 
