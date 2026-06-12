@@ -53,8 +53,9 @@ class JinaReaderFetcher:
                 if resp.status_code == 429:
                     logger.warning("Jina rate-limited",
                                    extra={"event": "jina_429", "url": url, "attempt": attempt})
-                    await asyncio.sleep(backoff)
-                    backoff *= 2
+                    if attempt < self._max_retries:
+                        await asyncio.sleep(backoff)
+                        backoff *= 2
                     continue
                 resp.raise_for_status()
                 text = resp.text or ""
@@ -74,9 +75,9 @@ def _bool_env(name: str, default: bool) -> bool:
     return default if raw is None else raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def build_default_fallback_chain() -> list:
+def build_default_fallback_chain() -> list[FallbackFetcher]:
     """Construct the fallback chain from environment. Default = [Jina] (free)."""
-    chain: list = []
+    chain: list[FallbackFetcher] = []
     if _bool_env("JINA_ENABLED", True):
         chain.append(JinaReaderFetcher(api_key=os.getenv("JINA_API_KEY"), enabled=True))
     if _bool_env("FIRECRAWL_FALLBACK_ENABLED", False):  # OFF by default → $0
