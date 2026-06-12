@@ -7,14 +7,35 @@ pricing before relying on cost numbers; they drift over time.
 
 import os
 
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 # ── Refresh-run knobs ─────────────────────────────────────────────────────
-FRESHNESS_FLOOR_HOURS: int = 24      # only pantries staler than this are candidates
-MAX_SOURCES_PER_RUN: int = 25        # curator selects at most this many per run
+FRESHNESS_FLOOR_HOURS: int = _env_int("REFRESH_FRESHNESS_HOURS", 24)   # only pantries staler than this are candidates
+MAX_SOURCES_PER_RUN: int = _env_int("REFRESH_MAX_SOURCES", 25)          # curator selects at most this many per run
 MAX_CONCURRENT: int = 4              # concurrent extraction subgraphs
 CONFIDENCE_THRESHOLD: int = 6        # confidence below this triggers a retry
 MAX_RETRIES: int = 2                 # retries after the initial attempt (3 attempts total)
 QUARANTINE_THRESHOLD: int = 5        # consecutive_failures above this → skip + report
-MAX_COST_USD: float = 0.50           # per-run dollar budget
+MAX_COST_USD: float = _env_float("REFRESH_MAX_COST_USD", 0.50)  # per-run dollar budget
 
 # ── Model ladder (cheap-first with escalation) ────────────────────────────
 # Index 0 = initial attempt, escalating per retry. The last rung is reused
