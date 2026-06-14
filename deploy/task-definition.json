@@ -1,0 +1,39 @@
+{
+  "family": "equitable-refresh-agent",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "2048",
+  "memory": "4096",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "executionRoleArn": "arn:aws:iam::094009462978:role/equitableRefreshExecutionRole",
+  "taskRoleArn": "arn:aws:iam::094009462978:role/equitableRefreshTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "refresh",
+      "image": "094009462978.dkr.ecr.us-east-1.amazonaws.com/equitable-refresh:latest",
+      "essential": true,
+      "environment": [
+        { "name": "DATABASE_NAME", "value": "equitable" },
+        { "name": "LANGCHAIN_TRACING_V2", "value": "true" },
+        { "name": "LANGCHAIN_PROJECT", "value": "equitable-refresh-agent" }
+      ],
+      "secrets": [
+        { "name": "MONGO_URI",         "valueFrom": "arn:aws:ssm:us-east-1:094009462978:parameter/equitable/refresh/MONGO_URI" },
+        { "name": "GEMINI_API_KEY",    "valueFrom": "arn:aws:ssm:us-east-1:094009462978:parameter/equitable/refresh/GEMINI_API_KEY" },
+        { "name": "LANGCHAIN_API_KEY", "valueFrom": "arn:aws:ssm:us-east-1:094009462978:parameter/equitable/refresh/LANGCHAIN_API_KEY" },
+        { "name": "JINA_API_KEY",      "valueFrom": "arn:aws:ssm:us-east-1:094009462978:parameter/equitable/refresh/JINA_API_KEY" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/equitable-refresh-agent",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "refresh"
+        }
+      }
+    }
+  ]
+}
