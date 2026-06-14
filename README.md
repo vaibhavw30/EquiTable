@@ -13,6 +13,45 @@ AI-powered food pantry discovery platform. Searches for food pantries near any l
 7. **Places without websites** are stored with basic Google data (confidence=3, "Limited info" flag)
 8. **7-day cache** prevents redundant API calls for the same area
 
+## Refresh Agent (LangGraph)
+
+A standalone, scheduled background job (`backend_ml/agent/`) keeps stored pantry data fresh. It's a **LangGraph multi-agent state machine**, deployed to **AWS ECS Fargate** and triggered **daily by EventBridge Scheduler**, traced end-to-end in **LangSmith**.
+
+- **Curator agent** ranks stale pantries (staleness + reliability + city diversity) and selects a budget-bounded batch.
+- **Extraction subgraph** (per source): `scrape → extract → validate`, with a conditional **retry loop** that feeds validation/low-confidence signals back and **escalates the Gemini model tier** (`gemini-3.1-flash-lite → gemini-3.5-flash → gemini-3.1-pro-preview`).
+- **Free-first scraping**: Crawl4AI, falling back to **Jina Reader** (free) for JS/anti-bot sites that Crawl4AI can't render — $0 scraping cost.
+- **Cost-aware**: per-run USD budget halts the run cleanly; **MongoDB checkpointer** enables resume-on-crash + time-travel debugging.
+
+### Parent graph (the refresh job)
+
+```mermaid
+graph TD;
+    __start__([start]) --> load_sources;
+    load_sources --> curator;
+    curator --> process_sources;
+    process_sources --> aggregate_report;
+    aggregate_report --> update_metrics;
+    update_metrics --> __end__([end]);
+```
+
+### Extraction subgraph (runs per source)
+
+```mermaid
+graph TD;
+    __start__([start]) --> scrape;
+    scrape -.->|skip if scrape failed| __end__([end]);
+    scrape -.-> extract;
+    extract --> validate;
+    validate -.->|retry: feedback + escalate tier| bump_retry;
+    validate -.->|done| persist;
+    bump_retry --> extract;
+    persist --> __end__;
+```
+
+**Run locally:** `cd backend_ml && python -m agent.refresh`
+**Visualize/debug interactively:** `pip install "langgraph-cli[inmem]"`, then `cd backend_ml && langgraph dev` (opens LangGraph Studio in your browser)
+**Deploy / operate / tear down:** see [`docs/deploy-refresh-agent.md`](docs/deploy-refresh-agent.md)
+
 ## Features
 
 - **Live Discovery** — Real-time food pantry discovery for any location in the US
