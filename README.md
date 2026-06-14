@@ -49,7 +49,7 @@ graph TD;
 ```
 
 **Run locally:** `cd backend_ml && python -m agent.refresh`
-**Visualize/debug interactively:** `pip install "langgraph-cli[inmem]"`, then `cd backend_ml && langgraph dev` (opens LangGraph Studio in your browser)
+**Visualize/debug interactively (optional):** `cd backend_ml && langgraph dev` opens [LangGraph Studio](https://github.com/langchain-ai/langgraph-studio) for an interactive graph + run inspector. Requires `pip install "langgraph-cli[inmem]"` on **Python ≤ 3.13** (the local dev-server has no stable Python 3.14 build yet). For most needs the diagrams above plus the [LangSmith](https://smith.langchain.com) trace view are enough — Studio is a convenience, not required.
 **Deploy / operate / tear down:** see [`docs/deploy-refresh-agent.md`](docs/deploy-refresh-agent.md)
 
 ## Features
