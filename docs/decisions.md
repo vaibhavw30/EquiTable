@@ -491,6 +491,32 @@ Escalation triggers on validation failure **or** `confidence < CONFIDENCE_THRESH
 
 ---
 
+## ADR-019: Refresh Agent Deployment — ECS Fargate + EventBridge, Public-Subnet (No NAT), SSM Secrets
+
+**Date**: 2026-06-11
+**Status**: Accepted
+
+**Context**: The LangGraph refresh agent (ADR-016/017) needs a scheduled, cheap, unattended home. It is a Dockerized CLI (`python -m agent.refresh`) that runs ~once daily, talks to MongoDB Atlas, Gemini, Jina, and LangSmith over the internet, and makes no inbound requests.
+
+**Decision**: Run it on **AWS ECS Fargate** (2 vCPU / 4 GB, x86_64), triggered **once daily by EventBridge Scheduler** (`cron(0 8 * * ? *)` UTC). The task runs in a **public subnet with a public IP and NO NAT Gateway** — a NAT would cost ~$32/mo, dwarfing the ~$1–2/mo job. Secrets (`MONGO_URI`, `GEMINI_API_KEY`, `LANGCHAIN_API_KEY`, `JINA_API_KEY`) live in **SSM Parameter Store SecureStrings** (free) and are injected via the task definition's `secrets`. Atlas network access is opened to **`0.0.0.0/0`** because the Fargate public IP is dynamic and cannot be allow-listed without reintroducing a NAT; security rests on a strong DB password + TLS. Region `us-east-1` (same as the Atlas cluster). Infra was created via raw AWS CLI; policy/task-def files are committed under `deploy/`, and `docs/deploy-refresh-agent.md` is the operating runbook.
+
+**Options Considered**:
+| Criteria | Fargate + EventBridge (public subnet) | Fargate (private subnet + NAT) | Lambda | GitHub Actions cron |
+|----------|--------------------------------------|-------------------------------|--------|---------------------|
+| Cost/mo | ~$1–2 | ~$34 (NAT) | low but 15-min limit + Chromium pain | $0 but shared runners, secrets in GH |
+| Chromium/Playwright | Fits in image | Fits | Hard (layers/size) | Fits |
+| Scheduling | Native (EventBridge) | Native | Native | Native (cron) |
+| Secrets | SSM (free) | SSM | SSM | GH secrets |
+| Egress to Atlas/Gemini | Public IP, no NAT | via NAT | via NAT/VPC | runner egress |
+
+**Consequences**:
+- DB is reachable from any IP (mitigated by credentials + TLS). Revisit with Atlas PrivateLink (M10+) if the posture needs tightening.
+- Image must be built `linux/amd64` (Fargate x86). Pushing a new `:latest` to ECR is the deploy step; scheduled runs pick it up automatically.
+- Verified end-to-end on `2026-06-14`: a Fargate run refreshed real Atlas pantries (Gemini-3 extraction, source_metrics written, LangSmith trace captured), exit 0.
+- **Re-evaluation trigger**: if daily runs exceed budget, or the security posture must tighten, add NAT+Elastic-IP (allow-listed) or Atlas PrivateLink.
+
+---
+
 ## Template for New Decisions
 
 ```markdown

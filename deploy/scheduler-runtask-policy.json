@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["ecs:RunTask"],
+      "Resource": "arn:aws:ecs:us-east-1:094009462978:task-definition/equitable-refresh-agent:*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iam:PassRole"],
+      "Resource": [
+        "arn:aws:iam::094009462978:role/equitableRefreshExecutionRole",
+        "arn:aws:iam::094009462978:role/equitableRefreshTaskRole"
+      ]
+    }
+  ]
+}
