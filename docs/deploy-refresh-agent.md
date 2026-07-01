@@ -1,12 +1,12 @@
 # Deploy Runbook — Food Rescue Refresh Agent (AWS Fargate)
 
-The refresh agent runs as a **scheduled AWS Fargate task**: once daily it re-scrapes stale
+The refresh agent runs as a **scheduled AWS Fargate task**: every ~2 weeks it re-scrapes stale
 pantries (Crawl4AI → free Jina fallback), extracts with Gemini 3, and updates MongoDB Atlas.
 Cost ≈ **$1–2/month** AWS + ≈ **$0.50–1/month** Gemini; scraping is $0.
 
 - **Account / region:** `094009462978` / `us-east-1`
 - **Image:** `094009462978.dkr.ecr.us-east-1.amazonaws.com/equitable-refresh:latest`
-- **Schedule:** `equitable-refresh-daily` — `cron(0 8 * * ? *)` UTC (08:00 UTC daily)
+- **Schedule:** `equitable-refresh-daily` — `rate(14 days)` (every ~2 weeks; the name is legacy from the original daily cron)
 - **Target DB:** Atlas `equitable` (production)
 
 ## Created resources (inventory)
@@ -58,13 +58,13 @@ aws logs tail /ecs/equitable-refresh-agent --region us-east-1 --since 20m --foll
 ```bash
 # pause
 aws scheduler update-schedule --name equitable-refresh-daily --region us-east-1 --state DISABLED \
-  --schedule-expression "cron(0 8 * * ? *)" --schedule-expression-timezone UTC \
+  --schedule-expression "rate(14 days)" \
   --flexible-time-window '{"Mode":"OFF"}' --target "$(aws scheduler get-schedule --name equitable-refresh-daily --region us-east-1 --query Target)"
 # (simpler) delete entirely
 aws scheduler delete-schedule --name equitable-refresh-daily --region us-east-1
 ```
 
-**Change the run time:** re-run `create-schedule`/`update-schedule` with a new `cron(...)`.
+**Change the cadence:** re-run `update-schedule` with a new `--schedule-expression` — a `rate(...)` (e.g. `rate(7 days)`) or a `cron(...)` (add `--schedule-expression-timezone UTC` for cron).
 
 **Deploy a new image version** (after code changes):
 ```bash

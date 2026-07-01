@@ -15,7 +15,7 @@ AI-powered food pantry discovery platform. Searches for food pantries near any l
 
 ## Refresh Agent (LangGraph)
 
-A standalone, scheduled background job (`backend_ml/agent/`) keeps stored pantry data fresh. It's a **LangGraph multi-agent state machine**, deployed to **AWS ECS Fargate** and triggered **daily by EventBridge Scheduler**, traced end-to-end in **LangSmith**.
+A standalone, scheduled background job (`backend_ml/agent/`) keeps stored pantry data fresh. It's a **LangGraph multi-agent state machine**, deployed to **AWS ECS Fargate** and triggered **every ~2 weeks by EventBridge Scheduler**, traced end-to-end in **LangSmith**.
 
 - **Curator agent** ranks stale pantries (staleness + reliability + city diversity) and selects a budget-bounded batch.
 - **Extraction subgraph** (per source): `scrape → extract → validate`, with a conditional **retry loop** that feeds validation/low-confidence signals back and **escalates the Gemini model tier** (`gemini-3.1-flash-lite → gemini-3.5-flash → gemini-3.1-pro-preview`).
