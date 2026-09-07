@@ -48,13 +48,14 @@ EXTRACTION_MODEL_LADDER: list[str] = [
 CURATOR_MODEL: str = "gemini-3.1-flash-lite"
 
 # ── Pricing: model -> (input_per_1M, output_per_1M) in USD ────────────────
-# Approximate Gemini 3 pricing — VERIFY against current rates (the docstring
-# note applies). A missing key silently costs $0, so keep this in sync with
-# EXTRACTION_MODEL_LADDER + CURATOR_MODEL.
+# Official Gemini 3 rates as of 2026-06 (ai.google.dev/gemini-api/docs/pricing).
+# Standard ≤200k-prompt tier; thinking/reasoning tokens bill at the output rate.
+# VERIFY against current rates — they drift over time. A missing key silently
+# costs $0, so keep this in sync with EXTRACTION_MODEL_LADDER + CURATOR_MODEL.
 MODEL_PRICING: dict[str, tuple[float, float]] = {
-    "gemini-3.1-flash-lite": (0.10, 0.40),
-    "gemini-3.5-flash": (0.30, 2.50),
-    "gemini-3.1-pro-preview": (1.25, 10.00),
+    "gemini-3.1-flash-lite": (0.25, 1.50),
+    "gemini-3.5-flash": (1.50, 9.00),
+    "gemini-3.1-pro-preview": (2.00, 12.00),
 }
 
 

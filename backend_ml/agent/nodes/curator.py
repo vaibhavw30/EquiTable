@@ -11,10 +11,27 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from pydantic import BaseModel, Field
+
 from agent.config import MAX_SOURCES_PER_RUN, QUARANTINE_THRESHOLD
 from agent.state import ParentState
 
 logger = logging.getLogger("equitable")
+
+
+class CuratorRanking(BaseModel):
+    """Structured-output schema for the LLM ranker.
+
+    Using ``with_structured_output`` (as the extractor does) lets LangChain own
+    the parsing, so we never touch the raw response. Gemini 3 returns
+    ``AIMessage.content`` as a *list* of content blocks rather than a string —
+    hand-parsing it with ``.content.strip()`` raises ``AttributeError`` — so
+    structured output is the robust path.
+    """
+
+    selected: list[str] = Field(
+        description="source_url values in the order they should be refreshed")
+    reasoning: str = Field(description="brief explanation of the chosen order")
 
 
 def quarantine_and_prefilter(candidates: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -71,14 +88,19 @@ def make_curator_node(ranker=None):
 def make_llm_ranker(chat_model):
     """Return an async ranker(candidates) -> (ordered_list, reasoning).
 
-    `chat_model` is a LangChain chat model (curator tier). It returns JSON
-    {"selected": [source_url,...], "reasoning": "..."}; we reorder candidates
-    to match and append any the LLM omitted (by staleness) so nothing is lost.
+    `chat_model` is a LangChain chat model (curator tier). We wrap it with
+    ``with_structured_output(CuratorRanking, include_raw=True)`` — mirroring the
+    extractor — so LangChain returns a validated ``CuratorRanking`` instead of a
+    raw message we'd have to parse by hand. The LLM picks a refresh order; we
+    reorder candidates to match and append any it omitted (by staleness) so
+    nothing is lost.
 
-    On any exception (parse error, network error, etc.) the caller (curator_node)
-    catches it and falls back to staleness order.
+    On any failure (parse error, network error, etc.) the ranker raises and the
+    caller (curator_node) falls back to deterministic staleness order.
     """
     from langchain_core.messages import HumanMessage
+
+    structured = chat_model.with_structured_output(CuratorRanking, include_raw=True)
 
     async def ranker(candidates):
         now = datetime.now(timezone.utc)
@@ -102,19 +124,24 @@ def make_llm_ranker(chat_model):
             "You are a data-refresh curator. Given these food-pantry sources and "
             "their reliability metrics, return the order to refresh them this run. "
             "Prioritize staleness, reliability (higher success_rate), and city "
-            "diversity. Respond ONLY with JSON: "
-            '{"selected": [source_url, ...], "reasoning": "..."}\n\n'
+            "diversity.\n\n"
             f"{json.dumps(summary, default=str)}"
         )
-        resp = await chat_model.ainvoke([HumanMessage(content=prompt)])
-        text = resp.content.strip()
-        if text.startswith("```"):
-            text = text.split("```")[1].removeprefix("json").strip()
-        parsed = json.loads(text)
+        result = await structured.ainvoke([HumanMessage(content=prompt)])
+        # include_raw=True yields {"parsed", "raw", "parsing_error"}.
+        parsed = result.get("parsed") if isinstance(result, dict) else result
+        if parsed is None:
+            raise ValueError(
+                f"curator ranker structured output failed: "
+                f"{result.get('parsing_error') if isinstance(result, dict) else result}"
+            )
+
+        selected = parsed.selected or []
         by_url = {c["source_url"]: c for c in candidates}
-        ordered = [by_url[u] for u in parsed.get("selected", []) if u in by_url]
+        ordered = [by_url[u] for u in selected if u in by_url]
         # append anything the LLM dropped, staleness-first — nothing is lost
-        missing = [c for c in candidates if c["source_url"] not in parsed.get("selected", [])]
+        chosen = set(selected)
+        missing = [c for c in candidates if c["source_url"] not in chosen]
         ordered += _staleness_sort(missing)
-        return ordered, parsed.get("reasoning", "")
+        return ordered, parsed.reasoning
     return ranker

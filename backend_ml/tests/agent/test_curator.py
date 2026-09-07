@@ -47,51 +47,84 @@ async def test_curator_quarantines_and_excludes_from_selected():
     assert "bad" in quarantined_urls
 
 
-# ── Task 16: LLM ranker ──────────────────────────────────────────────────────
-from agent.nodes.curator import make_llm_ranker  # noqa: E402
+# ── Task 16 / Gemini-3 fix: LLM ranker via structured output ─────────────────
+from agent.nodes.curator import make_llm_ranker, CuratorRanking  # noqa: E402
 
 
-class _FakeChat:
+class _StructuredChat:
+    """Mimic ChatGoogleGenerativeAI.with_structured_output(schema, include_raw=True).
+
+    `with_structured_output` returns a runnable whose `ainvoke` yields the
+    LangChain ``{"parsed", "raw", "parsing_error"}`` dict (mirroring the
+    extractor). The bare `ainvoke` returns the raw Gemini-3 content shape — a
+    *list* of blocks, not a string — so tests can prove the ranker never calls
+    ``.content.strip()`` on it.
+    """
+
+    def __init__(self, selected, reasoning="because", parsing_error=None):
+        self._selected = selected
+        self._reasoning = reasoning
+        self._parsing_error = parsing_error
+        self.structured_called = False
+
+    def with_structured_output(self, schema, include_raw=True):
+        self.structured_called = True
+        parsed = None if self._parsing_error else schema(
+            selected=self._selected, reasoning=self._reasoning)
+        err = self._parsing_error
+
+        class _Runnable:
+            async def ainvoke(_self, messages):
+                return {"parsed": parsed, "raw": None, "parsing_error": err}
+
+        return _Runnable()
+
     async def ainvoke(self, messages):
+        # Real Gemini 3 returns .content as a list of content blocks, not a str.
         class M:
-            content = '{"selected": ["old", "new"], "reasoning": "freshness first"}'
+            content = [{"type": "text", "text": "{}", "extras": {"signature": "s"}}]
         return M()
 
 
 async def test_llm_ranker_orders_by_returned_list():
     cands = [_cand("new", 25), _cand("old", 100)]
-    ranker = make_llm_ranker(_FakeChat())
+    chat = _StructuredChat(selected=["old", "new"], reasoning="freshness first")
+    ranker = make_llm_ranker(chat)
     ordered, reasoning = await ranker(cands)
     assert [c["source_url"] for c in ordered] == ["old", "new"]
     assert "freshness" in reasoning
+    assert chat.structured_called  # used structured output, not hand-parsed JSON
+
+
+async def test_llm_ranker_handles_gemini3_list_content():
+    """Regression: Gemini 3 returns .content as a list of blocks. The old ranker
+    did ``resp.content.strip()`` and crashed with
+    ``AttributeError: 'list' object has no attribute 'strip'``. Structured
+    output sidesteps raw content parsing entirely."""
+    cands = [_cand("new", 25), _cand("old", 100)]
+    chat = _StructuredChat(selected=["old", "new"])
+    raw = await chat.ainvoke([])          # sanity: the shape that broke is a list
+    assert isinstance(raw.content, list)
+    ordered, _ = await make_llm_ranker(chat)(cands)
+    assert [c["source_url"] for c in ordered] == ["old", "new"]
 
 
 async def test_llm_ranker_appends_omitted_candidates():
     """Candidates the LLM omits from 'selected' must be appended, none lost."""
     cands = [_cand("a", 100), _cand("b", 50), _cand("c", 75)]
-
-    class _PartialChat:
-        async def ainvoke(self, messages):
-            class M:
-                content = '{"selected": ["a"], "reasoning": "a first"}'
-            return M()
-
-    ranker = make_llm_ranker(_PartialChat())
+    chat = _StructuredChat(selected=["a"], reasoning="a first")
+    ranker = make_llm_ranker(chat)
     ordered, _ = await ranker(cands)
     urls = [c["source_url"] for c in ordered]
     assert urls[0] == "a"                  # LLM pick is first
     assert set(urls) == {"a", "b", "c"}    # nothing lost
 
 
-async def test_llm_ranker_fallback_on_bad_json():
-    """When the LLM returns unparseable JSON, ranker raises (curator catches it)."""
-    class _BadChat:
-        async def ainvoke(self, messages):
-            class M:
-                content = "not json at all"
-            return M()
-
-    ranker = make_llm_ranker(_BadChat())
+async def test_llm_ranker_raises_on_parse_failure():
+    """When structured output can't parse (parsed=None / parsing_error set), the
+    ranker raises so curator_node falls back to deterministic staleness order."""
+    chat = _StructuredChat(selected=None, parsing_error=ValueError("bad output"))
+    ranker = make_llm_ranker(chat)
     try:
         await ranker([_cand("x", 48)])
         assert False, "Expected exception"
