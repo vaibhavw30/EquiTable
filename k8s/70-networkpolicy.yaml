@@ -1,0 +1,109 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# NetworkPolicies are ADDITIVE and default-allow until something selects a pod.
+# So the pattern is: one deny-all baseline that selects everything, then narrow
+# allows layered on top. Without the baseline, the allows below would grant
+# nothing extra — everything was already permitted.
+#
+# NOTE: policies are enforced by the CNI, not by Kubernetes itself. kind's
+# default CNI (kindnet) does NOT enforce them, so on a default kind cluster
+# these objects exist and are silently inert. See ADR-027 and the README for
+# the Calico install that makes them real — and for why applying an
+# unenforced NetworkPolicy and calling the workload isolated is a worse
+# position than having no policy at all.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: equitable
+spec:
+  # Empty selector = every pod in the namespace.
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: equitable
+spec:
+  # Both workloads need DNS, and it is the failure that looks least like a
+  # network policy problem: with egress denied, a MONGO_URI using mongodb+srv://
+  # fails at SRV resolution, which surfaces as an opaque Mongo timeout rather
+  # than "DNS blocked".
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-external-egress
+  namespace: equitable
+spec:
+  # Everything this project depends on is outside the cluster: MongoDB Atlas,
+  # Gemini, Jina Reader, LangSmith, and the pantry websites being scraped.
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Block the private ranges so a pod cannot reach cluster-internal
+              # services or cloud metadata endpoints through this rule. This
+              # matters more than usual here: the agent fetches attacker-chosen
+              # third-party URLs, so an SSRF via a malicious redirect is a real
+              # path, and 169.254.169.254 (link-local metadata) is inside
+              # 169.254.0.0/16.
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443    # Gemini, Jina, LangSmith, Atlas SRV/TLS, scraped sites
+        - protocol: TCP
+          port: 80     # plain-HTTP pantry sites (many small orgs still are)
+        - protocol: TCP
+          port: 27017  # MongoDB Atlas
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-api
+  namespace: equitable
+spec:
+  # Only the ingress controller may reach the API pods. Nothing else in the
+  # cluster can, and in particular the refresh agent cannot — the two workloads
+  # share a database, never a network path.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: equitable
+      app.kubernetes.io/component: api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000

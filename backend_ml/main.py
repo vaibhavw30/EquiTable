@@ -13,10 +13,17 @@ from typing import Optional
 from bson import ObjectId
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from database import connect_to_mongo, close_mongo_connection, get_collection
+from database import (
+    DatabaseUnavailable,
+    close_mongo_connection,
+    connect_to_mongo,
+    get_collection,
+    ping_database,
+)
 from models.discovery import DiscoveryRequest, DiscoveryResponse, DiscoveryStatus
 from models.pantry import Pantry, PantryStatus
 from services.discovery_service import DiscoveryService, clear_job_state
@@ -107,6 +114,68 @@ def _get_discovery_service() -> DiscoveryService:
 async def root():
     """Root endpoint - API health check"""
     return {"message": "EquiTable API is running"}
+
+
+# ── Kubernetes probes ────────────────────────────────────────────────────────
+#
+# Liveness and readiness answer *different* questions, and conflating them is
+# actively harmful:
+#
+#   liveness  — "is this process wedged?"  A failure gets the pod KILLED.
+#   readiness — "can this pod serve a request right now?"  A failure pulls the
+#               pod out of the Service endpoints but leaves it running.
+#
+# So liveness deliberately does NOT touch MongoDB. If Atlas is unreachable,
+# restarting the pod cannot fix it — but a Mongo-checking liveness probe would
+# restart every pod on a loop, turning a recoverable dependency outage into a
+# CrashLoopBackOff across the whole Deployment, and throwing away the warm
+# connection pool that would have recovered on its own.
+#
+# Readiness does check Mongo, because a pod that cannot reach the database
+# cannot answer /pantries, and should stop being sent traffic until it can.
+#
+# `GET /` stays as-is: it is the legacy liveness-ish endpoint the smoke tests
+# and Render's default check use, and it is exactly the naive hardcoded 200
+# these probes exist to replace.
+
+READINESS_PING_TIMEOUT_SECONDS = 2.0
+
+
+@app.get("/healthz/live")
+async def liveness_probe():
+    """Liveness — process is up and the event loop is responsive.
+
+    Intentionally dependency-free. See the note above on why checking Mongo
+    here would be worse than not probing at all.
+    """
+    return {"status": "alive"}
+
+
+@app.get("/healthz/ready")
+async def readiness_probe():
+    """Readiness — this pod can actually serve requests (MongoDB reachable).
+
+    Returns 503 with the failure reason when Mongo is unreachable, so kubelet
+    removes the pod from the Service endpoints instead of routing traffic that
+    would 500.
+    """
+    try:
+        latency_ms = await ping_database(READINESS_PING_TIMEOUT_SECONDS)
+    except DatabaseUnavailable as exc:
+        logger.warning(
+            "Readiness probe failed",
+            extra={"event": "readiness_failed", "error": str(exc)},
+        )
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unready", "dependency": "mongodb", "error": str(exc)},
+        )
+
+    return {
+        "status": "ready",
+        "dependency": "mongodb",
+        "latency_ms": round(latency_ms, 2),
+    }
 
 
 @app.get("/api/test")

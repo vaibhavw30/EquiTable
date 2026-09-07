@@ -517,6 +517,316 @@ Escalation triggers on validation failure **or** `confidence < CONFIDENCE_THRESH
 
 ---
 
+## ADR-022: Kubernetes for the API and Refresh Agent (Supersedes ADR-019's deployment topology)
+
+**Date**: 2026-09-05
+**Status**: Accepted
+
+**Context**: The refresh agent runs on ECS Fargate triggered by EventBridge Scheduler (ADR-019); the API runs on Render; the frontend on Vercel (ADR-005). Three deployment substrates, each configured by hand through a console or raw CLI calls, with no single artifact describing the system. Adding an environment means repeating console clicks and hoping the second one matches the first.
+
+The forcing function is external and worth stating plainly rather than dressing up: **the target roles (Tesla Infra, Verkada, and most platform positions) screen for Kubernetes and Terraform, and the résumé already claims Kubernetes.** This ADR exists partly to make an existing written claim true. That is a legitimate reason to build something, but it is not a technical justification, so the technical case is made separately below and is expected to stand on its own.
+
+**Options Considered**:
+
+| Criteria | Kubernetes (kind local) | Stay on ECS + Render | Nomad | Plain VM + systemd timers |
+|---|---|---|---|---|
+| Scheduled job primitive | CronJob, with overlap policy + deadlines | EventBridge + ECS RunTask | Periodic job | systemd timer |
+| Overlap protection | Declarative (`concurrencyPolicy: Forbid`) | **None** — EventBridge fires regardless | Declarative | Manual flock |
+| API rollout safety | Rolling update, probe-gated, automatic rollback | Render's own, opaque | Rolling | Manual |
+| Autoscaling | HPA on real pod metrics | Render plan tiers | Yes | No |
+| One artifact describing the system | Yes (`k8s/`) | No — split across 2 consoles | Yes | Partly |
+| Local reproduction of prod topology | Yes (kind) | No | Yes | No |
+| Operational cost | Real; a control plane to understand | Low | Real | Lowest |
+| Job-market value | High | Low | Low | None |
+
+**Decision**: Move the **API service** and the **refresh agent** onto Kubernetes, defined in `k8s/` and running on a local **kind** cluster. The frontend stays on Vercel — it is a static SPA on a CDN, and putting it in a cluster would be strictly worse (no CDN edge, more to operate, zero benefit). ECS is left intact and working during the migration rather than torn down; the image still builds `--target agent` with the same CMD, so `deploy/task-definition.json` needs no edits and the ECS path remains a live rollback.
+
+**The technical case, independent of the job market**: three real things improve.
+
+1. **Overlap protection becomes declarative.** EventBridge fires on schedule with no knowledge of whether the previous task is still running. Two concurrent crawls would double Gemini spend against a budget enforced per-process, and race on the same pantry documents. Today nothing prevents this; it has not happened because runs finish in minutes and fire fortnightly. `concurrencyPolicy: Forbid` makes it structurally impossible instead of merely unlikely.
+2. **The API gains probe-gated rollouts.** Render decides when a deploy is healthy. Here, readiness is defined against a real dependency check (ADR-025), and `maxUnavailable: 0` means a broken image never displaces a working one.
+3. **One reviewable artifact.** The system is a directory of YAML instead of two consoles and a runbook, which is also the precondition for Terraform (ADR-029).
+
+**Consequences**:
+
+- A control plane to operate and understand — genuinely more complex than `aws ecs run-task`. For a fortnightly batch job and a low-traffic API, **this is more machinery than the workload requires**, and that should be said out loud rather than rationalized away.
+- Local kind keeps the marginal cost at **$0/month**, preserving the existing ceiling. Note this project was never $0 overall: ADR-019 records ≈$1–2/mo ECS + ≈$0.50–1/mo Gemini. The $0 claim is about *scraping* (ADR-021), not the whole system.
+- kind is not production. A cluster running on one laptop with no real traffic proves the manifests are correct and the workloads run; it proves nothing about behavior under load, node failure, or a real upgrade. The README's "What this does not prove" section records exactly what is and is not demonstrated.
+- Two images now come from one Dockerfile via `--target`, sharing the Chromium layer.
+
+**Re-evaluation trigger**: If the API ever needs real uptime for actual users, move to a managed control plane (EKS/GKE) and price it before committing — a managed control plane is ~$72/mo before any nodes, which breaks the cost posture entirely. If the Kubernetes machinery is never exercised beyond the initial migration, the honest move is to acknowledge ECS was sufficient.
+
+---
+
+## ADR-023: CronJob for the Scheduled Refresh, and Why the Schedule Changed Shape
+
+**Date**: 2026-09-05
+**Status**: Accepted
+
+**Context**: The refresh agent is a batch process (`python -m agent.refresh`) that exits when done. It ran under EventBridge Scheduler at `rate(14 days)`. Kubernetes offers several ways to run something periodically, and the choice determines what happens on overlap, failure, and hang.
+
+**Options Considered**:
+
+| Criteria | CronJob | Deployment with an internal sleep loop | Argo Workflows / Airflow | Keep EventBridge → in-cluster webhook |
+|---|---|---|---|---|
+| Native to Kubernetes | Yes | Yes, but misuses the primitive | No (extra system) | No |
+| Overlap protection | `concurrencyPolicy: Forbid` | Hand-rolled | Yes | None |
+| Hang protection | `activeDeadlineSeconds` | Hand-rolled | Yes | None |
+| Retry semantics | `backoffLimit` | Hand-rolled | Yes | EventBridge retry |
+| Idle cost | Zero pods between runs | A pod idling 24/7 for a fortnightly job | Control plane always on | Zero |
+| Operational surface | Already present | Already present | A whole new system | Cross-cloud coupling |
+
+**Decision**: A **CronJob**. `concurrencyPolicy: Forbid`, `backoffLimit: 2`, `activeDeadlineSeconds: 3600`, `restartPolicy: Never`, `startingDeadlineSeconds: 3600`, `ttlSecondsAfterFinished: 86400`.
+
+A long-running Deployment that sleeps between runs was rejected outright: it burns a pod's resources continuously for a job that runs 26 times a year, and it reimplements — badly — the overlap, retry, and deadline handling the CronJob controller already provides.
+
+**The schedule is not a literal translation, and that is deliberate.** EventBridge `rate(14 days)` is *relative*: it measures from the previous run and drifts across the calendar. Cron is *absolute*: it matches calendar fields and cannot express "every 14 days" at all. The chosen `0 8 1,15 * *` (08:00 UTC on the 1st and 15th) keeps the same ~2-week cadence but pins it to dates, producing 14/15/16-day gaps instead of exactly 14. This changes nothing operationally: `REFRESH_FRESHNESS_HOURS=24` means only pantries staler than a day are candidates, so a gap varying by two days has no effect on what gets refreshed.
+
+**`restartPolicy: Never` over `OnFailure`** is a real choice. `OnFailure` restarts the container inside the same pod, overwriting the previous attempt's logs and hiding attempt count. `Never` creates a fresh pod per attempt: each attempt's logs stay independently inspectable, and — critically — the replacement pod still carries the same `batch.kubernetes.io/job-name` label, which is the anchor that makes resume work (ADR-024).
+
+**Consequences**:
+
+- **A skipped run is dropped, not queued.** `Forbid` does not defer the firing; that slot is simply lost and the next is a fortnight away. Acceptable because the job is idempotent (upserts keyed on `source_url`) and the freshness floor means a missed run only means slightly staler data. If the cadence were hourly this would be the wrong policy.
+- `activeDeadlineSeconds` counts from **Job** start across all retries, not per pod. A run that burns its hour on attempt 1 gets no attempt 2. For a job whose observed ECS runtime is minutes against a 60-minute ceiling, that margin is wide, but it is a real interaction and not the "one hour per try" it looks like.
+- Cost of a manual run is one command: `kubectl create job --from=cronjob/equitable-refresh`.
+
+**Re-evaluation trigger**: If refresh runs start approaching the hour, re-measure before raising `activeDeadlineSeconds` — a run that slow probably indicates a wedged scrape, which is exactly what the deadline exists to catch. If the cadence ever tightens to daily or hourly, revisit `Forbid` vs `Replace`.
+
+---
+
+## ADR-024: A Stable thread_id — Making Resume-on-Crash Actually Work (Refines ADR-020)
+
+**Date**: 2026-09-05
+**Status**: Accepted
+
+**Context**: ADR-020 adopted `langgraph-checkpoint-mongodb` so an interrupted run could resume rather than redo work, and stated: "`thread_id` is set to the `run_id` (a UUID generated at the start of each run), so each daily run has an isolated checkpoint namespace."
+
+Preparing the Kubernetes migration surfaced that **this design silently prevented resume from ever happening.** `agent/cli.py` generated `run_id = str(uuid.uuid4())` at process start and used it as the `thread_id`. A restarted process therefore always produced a *new* UUID, opened a *brand-new* checkpoint namespace, and re-entered the graph at START. Checkpoints were written faithfully on every run and never once read back.
+
+The existing tests did not catch this because they were testing a different thing. `tests/agent/test_checkpointer.py` hardcodes `thread_id = "resume-test-001"` and proves the MongoDB saver is durable across connections — which is true and worth testing. Durability is necessary for resume but not sufficient: nothing tested the entrypoint's choice of thread_id, which is where the behavior actually lived.
+
+This matters beyond tidiness: resume-on-crash was claimed in writing, and the claim was false in production while being defensible in the test suite.
+
+**Options Considered**:
+
+| Criteria | Job name via downward API | Pod name | Hash of the schedule slot | Fixed constant | Random UUID (status quo) |
+|---|---|---|---|---|---|
+| Stable across pod restarts in a run | **Yes** | No — new pod, new name | Yes | Yes | **No** |
+| Distinct between scheduled runs | **Yes** | Yes | Yes | **No** — all runs collide | Yes |
+| Works outside Kubernetes | Falls back | Falls back | Needs a clock convention | Yes | Yes |
+| Resume actually occurs | **Yes** | No | Yes | Yes, wrongly | **No** |
+
+**Decision**: Resolve the thread_id from a `REFRESH_RUN_ID` environment variable, injected in the CronJob from the pod label `batch.kubernetes.io/job-name` via the downward API. Fall back to `uuid4()` when unset.
+
+The Job name is the correct anchor because it is *both* stable and unique on exactly the right boundaries: every pod belonging to one Job — including `backoffLimit` retries after a crash — sees the same value, while the CronJob controller suffixes each firing with its scheduled timestamp so distinct runs never share a thread. Pod name fails the first property; a fixed constant fails the second and would collapse every run in history onto one thread.
+
+The UUID fallback is not a compromise but the right behavior off-cluster: an ad-hoc local run or the legacy ECS task has no external identity to anchor to, and each such run *should* stand alone. A blank or whitespace-only value falls back too — an empty string is falsy but a perfectly valid dict key, so passing it through would quietly collapse every run onto one shared thread.
+
+`invoke_or_resume()` checks `aget_state(config)` before invoking: a populated snapshot means resume (`ainvoke(None, config)`), an empty one means a fresh start (`ainvoke(initial_state, config)`). Passing the initial state to an existing thread would reset it to START — the original bug, in a new place.
+
+**Consequences**:
+
+- Resume is now verified by behavior, not by proxy. `tests/agent/test_resume.py` crashes a run inside `update_metrics`, restarts on the same thread through a fresh connection, and asserts `load_sources` executed **once** across both runs. Reverting `invoke_or_resume` to always-start-fresh makes that count 2 and the test fails — the regression is genuinely caught, which was confirmed by mutation rather than assumed.
+- Re-invoking a **completed** thread returns its final state without redoing work, so a duplicate pod is harmless instead of double-scraping.
+- **The resume-granularity limit from ADR-020 still stands and is unchanged by this.** The per-source fan-out lives inside the single `process_sources` node, so a crash mid-fan-out resumes by re-executing that whole node and re-scraping every selected source for that run. What this ADR fixes is narrower but more fundamental: previously the run resumed *nothing at all*. Now it resumes at node granularity. True per-source resume still requires modeling each source as its own branch via the Send API, still deferred.
+- ADR-020's sentence about a per-run UUID thread_id is superseded on Kubernetes; it remains accurate for the ECS path.
+
+**Re-evaluation trigger**: If re-scraping a whole batch on a mid-fan-out crash becomes expensive — more sources per run, or a pricier model tier — implement per-source Send-API branches so resume granularity matches the unit of work.
+
+---
+
+## ADR-025: Real Health Probes, and the Liveness/Readiness Split
+
+**Date**: 2026-09-05
+**Status**: Accepted
+
+**Context**: Before this, the only health-shaped endpoint was `GET /` returning a hardcoded `{"message": "EquiTable API is running"}`. It reports that the Python process can serialize a dict. It returns 200 while MongoDB is unreachable, while every index is missing, and while every real endpoint returns 500. `tests/test_smoke.py::test_health_check` asserted exactly that behavior.
+
+A load balancer pointed at that endpoint routes traffic to a pod that cannot serve any of it. **That is worse than having no health check**, because it converts "obviously down" into "up and silently failing" — the operator sees green while users see 500s.
+
+**Options Considered**:
+
+| Criteria | Split live/ready | One `/health` checking Mongo for both | One `/health` checking nothing | Deep check (Mongo + Gemini + Jina) |
+|---|---|---|---|---|
+| Mongo outage → pod killed? | No | **Yes — restart storm** | No | Yes |
+| Mongo outage → traffic stops? | Yes | Yes | **No** | Yes |
+| Recovers without restart | Yes | No | N/A | No |
+| Third-party outage → self-inflicted outage | No | No | No | **Yes** |
+| Probe latency bounded | Yes | Yes | Yes | No |
+
+**Decision**: Two endpoints answering two genuinely different questions.
+
+`GET /healthz/live` — **"is this process wedged?"** Dependency-free by design. A liveness failure gets the pod **killed**. If Atlas is unreachable, restarting cannot fix it: the second pod fails identically, so a Mongo-checking liveness probe converts a recoverable dependency blip into a cluster-wide CrashLoopBackOff, and throws away warm connection pools that would have recovered on their own. Liveness must only detect failures that a restart actually repairs — a deadlocked event loop, a wedged process.
+
+`GET /healthz/ready` — **"can this pod serve a request right now?"** Pings MongoDB and returns **503 with the failure reason** when it cannot. A readiness failure only removes the pod from the Service endpoints; the pod keeps running and rejoins automatically when the ping succeeds. This is level-triggered on current state, not latched, which is why a Mongo blip needs no restart.
+
+The ping is bounded by `READINESS_PING_TIMEOUT_SECONDS = 2.0`. **The timeout is as important as the check**: a probe that hangs never reports unready, so kubelet keeps the pod in rotation while it cannot serve — the exact failure the probe exists to prevent. Bounding the wait converts a hang into a definite failure.
+
+A `startupProbe` gates both. The app's lifespan connects to Atlas and ensures five indexes before uvicorn serves anything; on a cold start that takes real time. Without the gate, liveness starts counting immediately and kills the pod mid-startup, forever — a CrashLoopBackOff that reads like a code bug and is actually a probe misconfiguration.
+
+Deliberately **not** checked in readiness: Gemini, Jina, LangSmith. They are used by request-scoped paths, not by the service's ability to answer `/pantries`. Probing them would let a third-party outage take the API out of rotation — importing someone else's downtime as your own.
+
+**Consequences**:
+
+- `readinessProbe.timeoutSeconds` (3s) must stay **greater than** the app's own ping budget (2s). If kubelet gave up first, every slow-but-recoverable ping would read as a hard failure and the app's own 503-with-a-reason would never be seen. The two numbers are coupled; changing one requires changing the other.
+- `GET /` is intentionally unchanged — the smoke tests and Render's default check depend on it, and it stays as the concrete example of the naive check these probes replace.
+- Seven tests in `tests/test_health_probes.py` cover the cases that matter, which are the negative ones: liveness stays 200 while Mongo is down (the anti-restart-storm property), readiness 503s on a missing handle, on a refused connection, and on a hang past the timeout, then returns to 200 once Mongo recovers.
+
+**Re-evaluation trigger**: If readiness flaps under normal Atlas latency, raise the ping budget and kubelet timeout together rather than removing the check. If the API gains a dependency it genuinely cannot serve without, add it to readiness — never to liveness.
+
+---
+
+## ADR-026: Resource Requests, Limits, and HPA Targets
+
+**Date**: 2026-09-05
+**Status**: Accepted
+
+**Context**: Kubernetes needs `requests` (what the scheduler reserves, and what the HPA measures against) and `limits` (the ceiling). Getting these wrong is quiet: too-low memory limits OOM-kill under load, too-low CPU limits throttle into latency, and too-high requests waste capacity and suppress scaling.
+
+There is no production traffic profile for this service. Any number here is an estimate, and pretending otherwise would be the actual mistake.
+
+**Decision and derivation**:
+
+| Workload | CPU req | CPU limit | Mem req | Mem limit |
+|---|---|---|---|---|
+| API | 200m | 1000m | 512Mi | 2Gi |
+| Refresh agent | 500m | 2 | 1Gi | 4Gi |
+
+*Refresh agent* — anchored to something real: the ECS task definition running this exact code at 2 vCPU / 4 GiB, which has run successfully in production since 2026-06-14. Limits match that; requests sit well below because the job is bursty (Chromium spikes during a scrape, idles between sources) and a briefly throttled batch job just takes marginally longer, which costs nothing on a fortnightly schedule.
+
+*API* — CPU request is low because the hot path is Mongo-backed reads, which are I/O-bound; CPU sits near idle. Memory limit is generous because `/pantries/discover` spawns Chromium in-process via Crawl4AI, and **memory limits are enforced by OOM-kill, not throttling** — too low and a user-triggered crawl kills the pod mid-request. 2 GiB is half the ECS figure, on the reasoning that the API crawls one page at a time rather than fanning out.
+
+*HPA*: CPU utilization 70%, min 2, max 6. `averageUtilization` is a percentage of the **request** (200m), so 70% means 140m per pod — anchoring to the request is what keeps the number meaningful. Scale-up stabilizes over 60s so one noisy scrape does not trigger a scale event; scale-down over 300s with one pod per 120s, because discovery responses are long-lived SSE streams and yanking a pod mid-stream drops a user's in-flight results.
+
+**First real measurement** (2026-09-06, idle, on the kind cluster):
+
+| Pod | CPU | Memory | vs. request |
+|---|---|---|---|
+| equitable-api (×2) | 7–8m | ~112 MiB | 4% of the 200m CPU request, 22% of the 512Mi memory request |
+
+The API idles at roughly a twenty-fifth of its CPU request and a fifth of its memory request. Requests are a floor for the *scheduler* rather than a prediction of idle, and the memory headroom exists for the Chromium spike on `/pantries/discover` that this measurement does not exercise. The honest read: **the memory request is defensible; the CPU request is probably 2–4x too high.** That also means the HPA's 70%-of-200m target (140m/pod) sits even further above real usage than it appears — reinforcing the next bullet.
+
+**Honest limitations** — these belong on the record rather than in a footnote:
+
+- **These numbers are not measured under load.** The table above is idle on a laptop. The values are otherwise anchored to a known-good ECS configuration and to the shape of the workload, then given headroom. The correct process is to run representative traffic, observe actual usage, and set requests near the p50 with limits near the p99. That has not been done, because there is no representative traffic — one idle data point is a start, not a profile.
+- **CPU-only HPA is the wrong signal for this service.** The API is I/O-bound; under a burst of discovery requests it will saturate on concurrent scrapes and Mongo round-trips long before CPU reaches 140m per pod. The HPA will sit idle while latency climbs. The right metric is in-flight requests or p99 latency, which needs a custom-metrics adapter. CPU is what `autoscaling/v2` gives without extra infrastructure, and it is what was built. This is a known weakness, not an oversight.
+- One uvicorn worker per container is deliberate: multiple in-pod workers hide load from the HPA's per-pod CPU metric and multiply the Mongo connection pool per pod. Scale with replicas, not processes.
+
+**Re-evaluation trigger**: First real traffic. Replace these with observed p50/p99 values, and replace the CPU-based HPA with a latency- or concurrency-based one before claiming the autoscaling is meaningful.
+
+---
+
+## ADR-027: kind with Calico — a NetworkPolicy That Is Actually Enforced
+
+**Date**: 2026-09-05
+**Status**: Accepted
+
+**Context**: Phase 1 calls for a NetworkPolicy restricting pod-to-pod traffic. Kubernetes accepts NetworkPolicy objects unconditionally; **enforcement is the CNI plugin's job**. kind's default CNI, kindnet, does not implement NetworkPolicy. It accepts the objects, `kubectl get networkpolicy` lists them, and no packet is ever filtered.
+
+That failure mode is the dangerous kind: a policy that appears applied, reviews as applied, and enforces nothing. Shipping it and describing the workloads as network-isolated would be a false claim backed by convincing-looking evidence.
+
+**Options Considered**:
+
+| Criteria | kind + Calico | kind + kindnet | k3d (Flannel default) | Skip NetworkPolicy |
+|---|---|---|---|---|
+| Policies enforced | **Yes** | **No — silently inert** | No (Flannel); yes if swapped | N/A |
+| Setup complexity | One manifest + `disableDefaultCNI` | None | Similar swap needed | None |
+| Claim is truthful | Yes | **No** | No by default | Yes, trivially |
+
+**Decision**: Create the kind cluster with `disableDefaultCNI: true` and `podSubnet: 192.168.0.0/16`, then install Calico. The policy set is deny-all by default, plus three narrow allows: DNS to kube-dns, external egress on 80/443/27017, and ingress to API pods from the `ingress-nginx` namespace only.
+
+Two details are load-bearing:
+
+- **NetworkPolicies are additive and default-allow until a policy selects a pod.** Without the `default-deny-all` baseline that selects everything, the three "allow" policies would grant nothing extra — the traffic was already permitted. The baseline is what makes the allows meaningful.
+- **External egress excludes RFC1918 and link-local ranges.** The refresh agent fetches attacker-influenced third-party URLs, so SSRF via a malicious redirect is a real path, and `169.254.169.254` (cloud metadata) sits inside `169.254.0.0/16`. Allowing `0.0.0.0/0` without the exclusions would let a redirect reach cluster-internal services and metadata endpoints.
+
+The API and the refresh agent share a database but never a network path; nothing in the policy set permits traffic between them.
+
+**Consequences**:
+
+- `disableDefaultCNI` means nodes stay `NotReady` until Calico is installed. `scripts/k8s-up.sh` installs it and waits, but a manual `kind create cluster` with this config appears broken until that step runs. Worth knowing before debugging a "broken" cluster.
+- DNS is the most confusing thing to get wrong here: with egress denied, a `mongodb+srv://` URI fails at SRV resolution and surfaces as an opaque Mongo timeout rather than "DNS blocked". The dedicated `allow-dns-egress` policy exists to prevent that debugging trap.
+- Calico is more machinery than kindnet, and a component that can itself fail.
+
+**Re-evaluation trigger**: If Calico proves unstable on this host, the honest fallback is kindnet **plus** deleting the NetworkPolicy manifests and saying the workloads are not network-isolated — not keeping inert policies that imply otherwise.
+
+---
+
+## ADR-028: Secrets from .env at Apply Time; Self-Signed TLS Locally
+
+**Date**: 2026-09-05
+**Status**: Accepted
+
+**Context**: Five credentials are needed (`MONGO_URI`, `GEMINI_API_KEY`, `LANGCHAIN_API_KEY`, `JINA_API_KEY`, `GOOGLE_PLACES_API_KEY`). On ECS they live in SSM Parameter Store SecureStrings (ADR-019). Kubernetes needs them as a Secret, and the hard constraint is that **no real credential may ever enter git** — a secret committed once lives in history forever, and rewriting history is not a remediation anyone reliably completes.
+
+**Decision**: The real Secret is **never a file in the repo**. It is created at apply time from the already-gitignored `backend_ml/.env`:
+
+```
+kubectl create secret generic equitable-secrets \
+  --namespace equitable --from-env-file=backend_ml/.env \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+`k8s/11-secret.example.yaml` is committed as a placeholder template with `REPLACE_ME` values, documenting the required keys and the injection path. `scripts/k8s-up.sh` deliberately excludes it from the apply loop — applying it would overwrite the real Secret with placeholders.
+
+`--from-env-file` is preferred over repeated `--from-literal` because the latter puts every credential in shell history in plaintext.
+
+**Ingress TLS**: a self-signed certificate for `equitable.localtest.me`, generated by `scripts/k8s-tls-secret.sh` into the secret name the Ingress already references. `localtest.me` resolves to `127.0.0.1` from any resolver, which matters because TLS certificates cannot be issued for a bare IP — it gives local HTTPS a real hostname with no `/etc/hosts` editing. The generation uses `-addext subjectAltName`: browsers and Go's TLS stack stopped honoring the CN field for hostname verification years ago, so a CN-only cert fails verification while looking correct. On a real cluster, cert-manager issues a trusted certificate into the same secret name and no manifest changes at all.
+
+**Consequences**:
+
+- **A Kubernetes Secret is base64, not encryption.** At rest in etcd it is plaintext unless the cluster enables encryption-at-rest, and anyone with `get secrets` in the namespace can read every value. For a local kind cluster this is acceptable and should not be described as more than it is.
+- For a shared or production cluster this is **not** sufficient. The path forward is External Secrets Operator reading the existing SSM parameters (reusing ADR-019's store, which already works), or SOPS-encrypted manifests. Deferred deliberately: it adds a component with no benefit on a single-user local cluster.
+- Verified before writing this: no `.env` file is tracked, and `git log --all -- '*.env'` is empty. Only `backend_ml/.env.example` is committed, containing placeholders.
+- Self-signed means `curl -k` and a browser warning locally. Expected, and not a defect to work around.
+
+**Re-evaluation trigger**: The moment this runs anywhere another person can reach — move to External Secrets against SSM and enable etcd encryption-at-rest before that, not after.
+
+---
+
+## ADR-029: Terraform Scope — Namespace and Atlas, Not the Cluster or the Workloads
+
+**Date**: 2026-09-06
+**Status**: Accepted
+
+**Context**: Infrastructure was created by console clicks and raw CLI calls (ADR-019 records the AWS side explicitly: "Infra was created via raw AWS CLI"). Nothing describes the system as a reviewable artifact, so an infrastructure change gets no review while a one-line code change gets a PR. Terraform is also a standing gap for the target roles.
+
+The real question is not "should we use Terraform" but **what should it own**. Putting everything under Terraform is the obvious answer and the wrong one here.
+
+**Options Considered**:
+
+| Criteria | Namespace + Atlas (chosen) | Everything, incl. cluster + workloads | Cluster only | Nothing (status quo) |
+|---|---|---|---|---|
+| Single source of truth per object | Yes | Yes | Yes | No |
+| `terraform plan` works without a live cluster | **Yes** | **No** — `kubernetes_manifest` needs one at plan time | Yes | N/A |
+| Workload changes reviewable as k8s YAML | Yes | No — HCL transliteration | Yes | Yes |
+| Duplicates `k8s-up.sh` | No | Yes (cluster) | Yes (cluster) | No |
+| Secrets kept out of state | Yes | Only with care | Yes | Yes |
+
+**Decision**: Terraform owns the **Kubernetes namespace, ServiceAccounts, and ConfigMap**, plus **MongoDB Atlas** network access and cluster. It does not own the kind cluster, the workload manifests, or the Secret.
+
+The spec allowed "cluster **or** namespace"; namespace is the better half of that choice because `scripts/k8s-up.sh` already creates the cluster, and a Terraform-managed kind cluster would be a second way to create the same object that can disagree with the first.
+
+Three exclusions, each for a concrete reason:
+
+- **Workload manifests stay YAML.** `kubernetes_manifest` requires a *reachable cluster at plan time*. Adopting it would make the `terraform plan` CI job depend on a live cluster — which defeats the entire purpose of gating changes on a plan. Deployment/Service/Ingress/HPA/CronJob also simply read better as Kubernetes YAML than as HCL restating the same fields.
+- **The Secret is owned by neither.** Terraform state stores values in **plaintext**. A `kubernetes_secret` resource would write every API key into the state file and, once the S3 backend is enabled, into a bucket — strictly worse than the status quo. It is created from `.env` at apply time (ADR-028).
+- **The kind cluster stays in the script**, per above.
+
+**Atlas is import-guarded and off by default.** `var.manage_atlas` defaults to `false`. The project and cluster already exist and hold production data; applying without matching state makes Terraform plan to *create* a cluster it thinks is missing, and reconciling that against a live database is how databases get destroyed. The documented sequence is `terraform import` → `terraform plan` → confirm "No changes" → only then apply. `prevent_destroy = true` is a backstop, not the plan. `var.atlas_instance_size` is validated against M0/M2/M5 so that moving off the free tier (M2 ≈ $9/mo) is an explicit reviewable change rather than an unnoticed edit.
+
+**Remote state is written but commented out.** Local state keeps `terraform plan` working offline and creates no billable AWS resources for anyone who clones the repo. This is honest about the tradeoff: local state is fine for one operator on one laptop and **not** fine the moment a second person or a CI job can apply, because concurrent applies against unlocked state corrupt it. Locking uses S3 native conditional writes (`use_lockfile`, Terraform ≥ 1.11) rather than the older DynamoDB lock table — one less resource to create, pay for, and forget.
+
+**Consequences**:
+
+- The provider pins `config_context = "kind-equitable"` instead of following the current kubectl context. An apply landing on an unintended cluster is the most expensive available mistake, and defaulting to "whatever is current" invites exactly that.
+- Two tools now touch the same namespace: Terraform creates it, kubectl fills it. The boundary is documented in `terraform/README.md` and holds as long as nobody adds workload resources to HCL.
+- **`terraform apply` has not been run against Atlas.** `terraform init` and `terraform validate` pass and the config is formatted, but the Atlas resources are unexercised — they need the import and API credentials first. The Kubernetes half is the tested path. Saying the infrastructure "is in Terraform" without that qualifier would overstate it.
+
+**Re-evaluation trigger**: Before a second person can apply, enable the S3 backend — unlocked shared state is a corruption waiting to happen. If Atlas is ever recreated from scratch, do it through Terraform so the import dance is never needed again.
+
+---
+
 ## Template for New Decisions
 
 ```markdown

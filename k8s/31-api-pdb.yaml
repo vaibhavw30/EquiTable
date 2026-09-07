@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: equitable-api
+  namespace: equitable
+spec:
+  # Keeps at least one API pod serving through *voluntary* disruptions — node
+  # drains, cluster upgrades. It does not protect against crashes or node
+  # failure, which are involuntary.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: equitable
+      app.kubernetes.io/component: api

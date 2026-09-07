@@ -35,6 +35,68 @@ from agent.nodes.metrics import make_update_metrics_node
 logger = logging.getLogger("equitable")
 
 
+# Environment variable carrying the stable identity of a scheduled run.
+# In Kubernetes this is injected from the pod label
+# `batch.kubernetes.io/job-name` via the downward API, so every pod belonging
+# to the same Job — including retries after a crash — sees the same value.
+RUN_ID_ENV_VAR = "REFRESH_RUN_ID"
+
+
+def resolve_run_id() -> str:
+    """Return the identity this run checkpoints under (the LangGraph thread_id).
+
+    Resume-on-crash only works if the thread_id is *stable across process
+    restarts*. Before this, run_id was a fresh ``uuid4()`` on every start, so a
+    restarted container opened a brand-new checkpoint namespace and silently
+    redid the entire run — checkpoints were written but never read back.
+
+    Precedence:
+      1. ``REFRESH_RUN_ID`` when set — injected from the Kubernetes Job name, so
+         it is identical for every pod of one scheduled run and distinct between
+         runs.
+      2. A random UUID otherwise — preserves the previous behavior for ad-hoc
+         local invocations and the legacy ECS task, where there is no external
+         identity to anchor to and each run should stand alone.
+    """
+    injected = os.getenv(RUN_ID_ENV_VAR, "").strip()
+    if injected:
+        return injected
+    return str(uuid.uuid4())
+
+
+async def invoke_or_resume(app, config: dict, initial_state: dict) -> dict:
+    """Resume an interrupted run for this thread_id, or start a fresh one.
+
+    LangGraph resumes a thread when invoked with ``None`` as input: it replays
+    from the last completed checkpoint instead of re-entering at START. Passing
+    ``None`` for a thread that has no checkpoint is an error, so the snapshot is
+    checked first.
+
+    A thread that already ran to completion returns its final state without
+    redoing work, which makes a duplicate Job pod harmless.
+    """
+    snapshot = await app.aget_state(config)
+    thread_id = config["configurable"]["thread_id"]
+
+    if snapshot.values:
+        logger.info(
+            "Resuming from checkpoint",
+            extra={
+                "event": "refresh_resumed",
+                "run_id": thread_id,
+                "next_nodes": list(snapshot.next),
+                "already_processed": len(snapshot.values.get("results", [])),
+            },
+        )
+        return await app.ainvoke(None, config)
+
+    logger.info(
+        "No prior checkpoint; starting fresh",
+        extra={"event": "refresh_fresh_start", "run_id": thread_id},
+    )
+    return await app.ainvoke(initial_state, config)
+
+
 async def run_refresh(db_name: str | None = None) -> dict:
     """Run a single refresh pass against the live database.
 
@@ -55,8 +117,15 @@ async def run_refresh(db_name: str | None = None) -> dict:
 
     await connect_to_mongo()
 
-    run_id = str(uuid.uuid4())
-    logger.info("Refresh starting", extra={"event": "refresh_start", "run_id": run_id})
+    run_id = resolve_run_id()
+    logger.info(
+        "Refresh starting",
+        extra={
+            "event": "refresh_start",
+            "run_id": run_id,
+            "run_id_source": "env" if os.getenv(RUN_ID_ENV_VAR, "").strip() else "generated",
+        },
+    )
     cost_tracker = CostTracker(budget_usd=MAX_COST_USD)
 
     # Curator ranker — cheapest Gemini tier for ranking, not extraction
@@ -86,9 +155,10 @@ async def run_refresh(db_name: str | None = None) -> dict:
                 update_metrics_node=make_update_metrics_node(),
                 checkpointer=cp,
             )
-            final = await app.ainvoke(
-                {"run_id": run_id, "cost_budget_usd": MAX_COST_USD},
+            final = await invoke_or_resume(
+                app,
                 {"configurable": {"thread_id": run_id}},
+                {"run_id": run_id, "cost_budget_usd": MAX_COST_USD},
             )
     except Exception:
         logger.exception("Refresh run failed", extra={"event": "refresh_error", "run_id": run_id})

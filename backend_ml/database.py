@@ -2,6 +2,7 @@
 Database connection module for MongoDB Atlas
 """
 
+import asyncio
 import logging
 import os
 import certifi
@@ -93,6 +94,43 @@ async def close_mongo_connection():
     if client:
         client.close()
         logger.info("Closed MongoDB connection", extra={"event": "db_disconnected"})
+
+
+class DatabaseUnavailable(RuntimeError):
+    """Raised when MongoDB cannot be reached within the probe budget."""
+
+
+async def ping_database(timeout_seconds: float = 2.0) -> float:
+    """Round-trip a `ping` to MongoDB; raise DatabaseUnavailable if it fails.
+
+    Used by the readiness probe. The timeout matters as much as the ping: a
+    probe that hangs is a probe that never reports unready, so kubelet would
+    keep the pod in the Service endpoints while it cannot serve. Bounding the
+    wait converts a hang into a definite failure.
+
+    Reads the client off the `db` handle rather than the module-level `client`
+    so it works under the test fixture, which swaps only `db`.
+
+    Returns:
+        Round-trip latency in milliseconds.
+
+    Raises:
+        DatabaseUnavailable: not connected, timed out, or the ping errored.
+    """
+    if db is None:
+        raise DatabaseUnavailable("database handle is not initialised")
+
+    started = asyncio.get_running_loop().time()
+    try:
+        await asyncio.wait_for(db.client.admin.command("ping"), timeout=timeout_seconds)
+    except asyncio.TimeoutError as exc:
+        raise DatabaseUnavailable(
+            f"ping exceeded {timeout_seconds}s budget"
+        ) from exc
+    except Exception as exc:
+        raise DatabaseUnavailable(f"ping failed: {exc}") from exc
+
+    return (asyncio.get_running_loop().time() - started) * 1000
 
 
 def get_database():

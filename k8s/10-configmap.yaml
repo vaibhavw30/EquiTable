@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: equitable-config
+  namespace: equitable
+data:
+  # Non-secret runtime configuration. Anything here is world-readable to
+  # anyone with get/list on ConfigMaps — credentials belong in the Secret.
+  # Values mirror the ECS task definition (deploy/task-definition.json) so the
+  # two deployments behave identically during the migration.
+
+  DATABASE_NAME: "equitable"
+
+  # Refresh-run knobs — read by backend_ml/agent/config.py
+  REFRESH_MAX_SOURCES: "25"
+  REFRESH_MAX_COST_USD: "0.50"
+  REFRESH_FRESHNESS_HOURS: "24"
+
+  # Scraper fallback chain (ADR-021). Jina is free; Firecrawl is paid and stays
+  # off, which is what keeps scraping at $0.
+  JINA_ENABLED: "true"
+  FIRECRAWL_FALLBACK_ENABLED: "false"
+
+  # LangSmith tracing (ADR-015). The API key itself is in the Secret.
+  LANGCHAIN_TRACING_V2: "true"
+  LANGCHAIN_PROJECT: "equitable-refresh-agent"

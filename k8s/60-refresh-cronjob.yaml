@@ -1,0 +1,153 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: equitable-refresh
+  namespace: equitable
+  labels:
+    app.kubernetes.io/name: equitable
+    app.kubernetes.io/component: refresh-agent
+spec:
+  # ── Schedule ────────────────────────────────────────────────────────────
+  # 08:00 UTC on the 1st and 15th.
+  #
+  # This is NOT a literal translation of the EventBridge `rate(14 days)` it
+  # replaces, because cron cannot express "every 14 days": a rate() is relative
+  # to the previous run and drifts across the calendar, while cron matches
+  # absolute calendar fields. 1st-and-15th is the closest faithful equivalent —
+  # same ~2-week cadence, but pinned to dates instead of drifting. The
+  # 24-hour freshness floor (REFRESH_FRESHNESS_HOURS) means the slightly
+  # uneven gap (14/15/16 days) changes nothing about what gets refreshed.
+  schedule: "0 8 1,15 * *"
+  timeZone: "Etc/UTC"
+
+  # ── Overlap ─────────────────────────────────────────────────────────────
+  # Forbid: if the previous run is somehow still going when the next fires,
+  # SKIP the new one rather than running both. Two concurrent crawls would
+  # double the Gemini spend against a per-run budget that is enforced per
+  # process, and would race on the same pantry documents.
+  #
+  # Note what Forbid does NOT do: it does not queue the skipped run. That firing
+  # is dropped, and the next one is two weeks out. Acceptable here because the
+  # job is idempotent and the freshness floor means a missed run just means
+  # slightly staler data — not lost work.
+  concurrencyPolicy: Forbid
+
+  # If the controller was down at fire time, still run — but only if we are
+  # less than an hour late. Beyond that, wait for the next slot rather than
+  # starting a batch job at an unexpected hour.
+  startingDeadlineSeconds: 3600
+
+  # Keep a few finished Jobs around for `kubectl logs` post-mortems.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  jobTemplate:
+    spec:
+      # Up to 3 pod attempts (initial + 2 retries). Each retry is a fresh pod
+      # that resumes the SAME LangGraph thread — see REFRESH_RUN_ID below.
+      backoffLimit: 2
+
+      # Hard wall-clock ceiling for the whole Job, retries included, measured
+      # from Job start. A hung crawl (a site that never closes the connection,
+      # a wedged Chromium) is killed at one hour instead of running until the
+      # next fortnight's fire. Sized against observed ECS runs of a few
+      # minutes for 25 sources, leaving a wide margin.
+      activeDeadlineSeconds: 3600
+
+      # Clean up the Job object a day after it finishes.
+      ttlSecondsAfterFinished: 86400
+
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: equitable
+            app.kubernetes.io/component: refresh-agent
+        spec:
+          serviceAccountName: equitable-refresh
+
+          # Never (not OnFailure): a failure produces a brand-new pod rather
+          # than restarting the container in place. That keeps each attempt's
+          # logs separately inspectable, and the replacement pod still carries
+          # the same job-name label, so it resumes the same checkpoint thread.
+          restartPolicy: Never
+
+          terminationGracePeriodSeconds: 30
+
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+
+          containers:
+            - name: refresh
+              image: equitable-agent:dev
+              imagePullPolicy: IfNotPresent
+
+              envFrom:
+                - configMapRef:
+                    name: equitable-config
+                - secretRef:
+                    name: equitable-secrets
+
+              env:
+                # ── The resume anchor ────────────────────────────────────
+                #
+                # This is what makes "resume-on-crash" true rather than
+                # aspirational. agent/cli.py uses REFRESH_RUN_ID as the
+                # LangGraph thread_id; before this it generated a fresh uuid4()
+                # per process, so a restarted pod opened a brand-new checkpoint
+                # namespace and silently redid the entire run. Checkpoints were
+                # written and never read back.
+                #
+                # `batch.kubernetes.io/job-name` is the right anchor because it
+                # is:
+                #   stable  — every pod of one Job sees the same value, so a
+                #             retry after a crash lands on the dead pod's thread
+                #   unique  — the CronJob controller suffixes each firing with
+                #             its scheduled timestamp, so separate runs never
+                #             collide on one thread
+                #
+                # Falls back to uuid4() when unset (local runs, the ECS task),
+                # preserving the old standalone-run behavior.
+                - name: REFRESH_RUN_ID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['batch.kubernetes.io/job-name']
+
+                # No home directory in the image + read-only root filesystem;
+                # Crawl4AI and Playwright both cache under $HOME.
+                - name: HOME
+                  value: /tmp
+
+              # Sized from the ECS task that runs this exact code
+              # (deploy/task-definition.json: 2 vCPU / 4 GiB). Requests are set
+              # well below limits because the job is bursty — Chromium spikes
+              # during a scrape and idles between sources — and a batch job that
+              # is briefly CPU-throttled just takes slightly longer, which costs
+              # nothing on a fortnightly schedule.
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 1Gi
+                limits:
+                  cpu: "2"
+                  memory: 4Gi
+
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+
+          volumes:
+            - name: tmp
+              emptyDir:
+                # Chromium's cache plus scraped markdown for 25 sources.
+                sizeLimit: 2Gi

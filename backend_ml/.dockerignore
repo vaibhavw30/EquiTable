@@ -1,10 +1,28 @@
+# Python environments and caches
 venv/
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Tests never run inside the runtime image
 tests/
+
+# Secrets must never enter the build context — an ENV/ARG leak or a stray
+# `COPY . .` would bake them into a layer that survives deletion.
 .env
 .env.*
+!.env.example
+
+# Local scrape cache (stale data, and can be large)
 scripts/.scrape_cache.json
+
+# Docs and infra definitions are not application code
 README.md
+Dockerfile
+.dockerignore
+
+# VCS and editor noise
+.git/
+.gitignore
+.DS_Store

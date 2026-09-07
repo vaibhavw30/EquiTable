@@ -1,0 +1,40 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: equitable-api
+  namespace: equitable
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: equitable-api
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    # averageUtilization is a percentage of the *request* (200m), not the limit.
+    # 70% of 200m = 140m per pod before scaling out. Anchoring to the request is
+    # what makes the number meaningful: raise the request and the same 70% means
+    # more absolute CPU.
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      # React quickly to load, but not to a single noisy scrape: 60s of
+      # sustained pressure before adding pods.
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+    scaleDown:
+      # Scale down slowly. Discovery jobs are long-lived SSE streams, and
+      # yanking a pod mid-stream drops a user's in-flight results.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

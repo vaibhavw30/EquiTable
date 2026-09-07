@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: equitable
+  labels:
+    app.kubernetes.io/name: equitable
+    # Consumed by the NetworkPolicy in 70-networkpolicy.yaml: namespace
+    # selectors match on labels, and `kubernetes.io/metadata.name` is set
+    # automatically, but an explicit label documents the intent.
+    name: equitable

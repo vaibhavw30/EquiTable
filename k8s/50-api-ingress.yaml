@@ -1,0 +1,43 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: equitable-api
+  namespace: equitable
+  annotations:
+    # Redirect plain HTTP to HTTPS at the edge.
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+    # The discovery endpoint streams Server-Sent Events (ADR-012). nginx
+    # buffers proxied responses by default, which would hold SSE frames until
+    # the buffer fills — the stream would appear to hang and then dump all at
+    # once. Disabling buffering is what makes SSE actually stream.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+
+    # A discovery job scrapes many sites; the default 60s read timeout would
+    # cut the stream mid-job.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - equitable.localtest.me
+      # For local kind this is a self-signed cert created by
+      # scripts/k8s-tls-secret.sh. On a real cluster, cert-manager issues and
+      # renews it from Let's Encrypt into this same secret name, so nothing
+      # else in this file changes.
+      secretName: equitable-api-tls
+  rules:
+    # localtest.me resolves to 127.0.0.1 from any resolver, so local HTTPS
+    # works with a real hostname and no /etc/hosts editing — which matters
+    # because TLS certs cannot be issued for a bare IP.
+    - host: equitable.localtest.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: equitable-api
+                port:
+                  name: http

@@ -1,0 +1,160 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: equitable-api
+  namespace: equitable
+  labels:
+    app.kubernetes.io/name: equitable
+    app.kubernetes.io/component: api
+spec:
+  # Two replicas so a rolling update or a single node hiccup never drops the
+  # service to zero. The HPA (40-api-hpa.yaml) owns the count from here on —
+  # `replicas` is only the initial value.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: equitable
+      app.kubernetes.io/component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # never dip below the current capacity during a rollout
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: equitable
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: equitable-api
+
+      # SIGTERM → uvicorn drains in-flight requests. The discovery endpoint
+      # streams SSE, so give connections real time to close rather than the
+      # 30s default.
+      terminationGracePeriodSeconds: 60
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: api
+          # Built locally and side-loaded into kind (`kind load docker-image`),
+          # so IfNotPresent — Never would break a real registry-backed cluster,
+          # Always would fail in kind since :dev exists in no registry.
+          image: equitable-api:dev
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8000
+
+          envFrom:
+            - configMapRef:
+                name: equitable-config
+            - secretRef:
+                name: equitable-secrets
+
+          env:
+            # The image has no home directory (useradd --no-create-home) and the
+            # root filesystem is read-only, so point HOME at the writable
+            # emptyDir. Crawl4AI and Playwright both write cache under $HOME.
+            - name: HOME
+              value: /tmp
+
+          # ── Probes ───────────────────────────────────────────────────────
+          #
+          # startupProbe gates the other two. The app's lifespan connects to
+          # Atlas and ensures five indexes before uvicorn serves anything; on a
+          # cold start that can take tens of seconds. Without this gate the
+          # liveness probe would start counting immediately and kill the pod
+          # mid-startup, forever — a CrashLoopBackOff that looks like a code
+          # bug and is actually a probe misconfiguration.
+          # Budget: 30 × 2s = 60s to become live.
+          startupProbe:
+            httpGet:
+              path: /healthz/live
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+            timeoutSeconds: 2
+
+          # Liveness = "is this process wedged?" Failure KILLS the pod, so it
+          # deliberately does not touch MongoDB: restarting cannot fix an Atlas
+          # outage, and a Mongo-checking liveness probe would turn a dependency
+          # blip into a cluster-wide restart storm.
+          livenessProbe:
+            httpGet:
+              path: /healthz/live
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 2
+
+          # Readiness = "can this pod serve a request right now?" Failure only
+          # removes the pod from the Service endpoints. This one DOES check
+          # Mongo, because a pod that cannot reach the database can only 500.
+          #
+          # timeoutSeconds (3s) must exceed the app's own ping budget
+          # (READINESS_PING_TIMEOUT_SECONDS = 2.0s). If kubelet gave up first,
+          # every slow-but-recoverable ping would read as a hard failure and
+          # the app's own 503-with-a-reason would never be seen.
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+            successThreshold: 1
+            timeoutSeconds: 3
+
+          # ── Resources ────────────────────────────────────────────────────
+          #
+          # These are a defensible STARTING POINT, not a measured profile —
+          # see ADR-026. Derivation:
+          #
+          #   requests  what the scheduler reserves. Sized for the steady state:
+          #             this API mostly does Mongo-backed reads, which are
+          #             I/O-bound, so CPU sits near idle.
+          #   limits    the ceiling. Memory is generous because the discovery
+          #             endpoint spawns Chromium via Crawl4AI in-process, and a
+          #             memory limit is enforced by OOM-kill, not throttling —
+          #             too low and a user-triggered crawl kills the pod
+          #             mid-request.
+          #
+          # The 2 GiB memory ceiling is anchored to the ECS task that runs the
+          # same scraping code at 4 GiB (deploy/task-definition.json); the API
+          # crawls one page at a time rather than fanning out, so half is the
+          # starting guess.
+          #
+          # CPU limit tradeoff: a CPU limit throttles via CFS rather than
+          # killing, so a too-low limit shows up as latency, not crashes. 1000m
+          # against a 200m request leaves 5x headroom for bursts.
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        # Read-only root filesystem means every writable path must be explicit.
+        # Chromium's sandbox, Playwright and Python tempfiles all land here.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi

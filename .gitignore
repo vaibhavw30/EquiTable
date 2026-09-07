@@ -60,3 +60,9 @@ agents/
 
 # Git worktrees (isolated workspaces)
 .worktrees/
+
+# Terraform: provider cache and state (state can contain secrets)
+terraform/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
