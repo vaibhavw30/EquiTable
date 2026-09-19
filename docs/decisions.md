@@ -945,6 +945,48 @@ Supply-chain hygiene: all three third-party actions are pinned to commit SHAs (t
 
 ---
 
+## ADR-033: Application Tests in CI — a MongoDB Service Container, Not Atlas
+
+**Date**: 2026-09-19
+**Status**: Accepted
+
+**Context**: "Smoke tests must always pass before any merge" has been a rule since the start, and nothing enforced it: 258 backend and 104 frontend tests ran only when someone remembered to run them. The rule was already being broken quietly. A frontend smoke test (*close button triggers collapse*) failed in 2 of 5 full-suite runs, and it would have made any CI gate flaky on day one.
+
+Locally the backend suite runs against **MongoDB Atlas** (`MONGO_URI` from `.env`, database `equitable_test`, dropped after every test). Everything else external — Gemini, Places, Jina, Firecrawl — is already mocked; only tests marked `live` touch the network, and they are opt-in.
+
+**Options Considered**:
+| Criteria | Atlas via a repo secret | `mongo:8.0` service container (chosen) | `mongomock` / in-memory fake |
+|----------|-------------------------|----------------------------------------|------------------------------|
+| Credentials in CI | Atlas URI (a production-cluster login) | **None** | None |
+| Works on fork PRs | No — secrets are withheld | **Yes** | Yes |
+| Concurrent runs isolated | **No** — every run drops the same `equitable_test` | Yes — one database per job | Yes |
+| Real `$near` / 2dsphere / unique indexes | Yes | **Yes** | Partial — geospatial is the gap |
+| Suite time | ~82s (network round-trips) | **~4s** | Fastest |
+
+**Decision**: `.github/workflows/tests.yml`, two jobs on every PR and every push to `main`:
+
+- **backend**: runs Python **3.12**, the interpreter in `backend_ml/Dockerfile`, rather than a laptop's 3.14, so the gate tests what ships. Uses a `mongo:8.0` service container (Atlas's major version) with a `mongosh` ping health check, and runs `pytest -m "not live"`. No code change was needed: `conftest.py` and `database.py` already enable TLS only for Atlas-shaped URIs, so `mongodb://localhost:27017` talks plaintext.
+- **frontend**: runs Node 22 with `npm ci`, `vitest run`, then `vite build`. A green test run with a broken production bundle is still broken.
+
+Same hygiene as ADR-032: actions pinned to commit SHAs, `persist-credentials: false`, a `contents: read` token, and cancel-in-progress per ref.
+
+The flaky smoke test was fixed first, at the root. It asserted the close button was *still present* after clicking close, which is mid-animation state: `AnimatePresence` unmounts the overlay after a 0.2s exit. It passed only when the assertion won the race. A 600ms wait made it fail 3/3. The test now waits for the overlay to be gone, which is what "triggers collapse" means. Making the collapse handler a no-op makes it fail, so it still catches the real bug.
+
+Deliberately **not** in the gate:
+- **Lint.** `npm run lint` already reports 26 problems on `main` (25 errors). Gating on it would make CI red on day one, and a permanently red check trains people to ignore it. Fix the backlog first, then add the step.
+- **Path filters.** A workflow skipped by `paths:` never reports, so a required check on it waits forever. The repo is public, so Actions minutes are free, and both jobs finish in a few minutes.
+- **`live` tests.** They cost money and depend on third-party sites. They stay opt-in.
+
+**Consequences**:
+
+- Rehearsed before pushing, in Linux containers with the workflow's exact commands on a copy of only the git-tracked files, with no `.env`. `python:3.12` plus `mongo:8.0`: 258 passed, 2 deselected. `node:22`: 104 passed and a clean build. The `mongosh` health command returns `1` in `mongo:8.0`. The full frontend suite passed 6/6 locally after the fix, against 3/5 before.
+- **Local and CI now use different databases.** Locally it is Atlas M0; in CI it is a vanilla `mongod` 8.0. Anything that works on one and not the other (M0 feature limits, network latency exposing a missing `await`) can pass in one place and fail in the other. The suite passes on both today.
+- CI verifies Python 3.12; local dev runs 3.14. A 3.14-only construct will now fail CI rather than production.
+
+**Re-evaluation trigger**: Once the lint backlog is zero, add `npm run lint` to the frontend job. If a test ever needs an Atlas-only feature (Atlas Search, vector search), give it a marker and run it outside the gate, as `live` is today. Do not move the whole suite back to Atlas. Once these checks have been green for a while, make them required on `main`.
+
+---
+
 ## Template for New Decisions
 
 ```markdown
