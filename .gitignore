@@ -66,3 +66,8 @@ terraform/.terraform/
 *.tfstate
 *.tfstate.*
 *.tfvars
+# Plan files and plan output from the CI steps (ADR-032) if run locally
+terraform/tfplan
+terraform/*.tfplan
+terraform/plan.txt
+terraform/replan.txt

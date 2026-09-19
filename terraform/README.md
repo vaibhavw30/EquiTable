@@ -76,9 +76,33 @@ only record of what Terraform believes exists.
 Locking uses S3's native conditional writes (`use_lockfile`, Terraform ≥ 1.11), which replaces the
 DynamoDB lock table the older pattern required.
 
+## CI
+
+`.github/workflows/terraform.yml` runs on every PR that touches `terraform/`, the three YAML twins
+(`k8s/00-namespace.yaml`, `10-configmap.yaml`, `15-serviceaccounts.yaml`), or the parity script
+(ADR-032). It holds no credentials and touches no real environment:
+
+1. `terraform fmt -check` and `terraform validate`.
+2. On a throwaway kind cluster named `equitable` (so the pinned `kind-equitable` context is real):
+   plan → fail if the plan contains any Atlas resource → apply → re-plan must be a no-op →
+   `scripts/check-tf-yaml-parity.sh`.
+
+The namespace, ServiceAccounts and ConfigMap are defined both here and in `k8s/`. **Change both.**
+Run the parity check locally after an apply:
+
+```bash
+../scripts/check-tf-yaml-parity.sh kind-equitable
+```
+
+If you add a provider or bump a version, refresh the lock for CI's platform as well as your own:
+
+```bash
+terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64
+```
+
 ## What is not verified
 
-`terraform validate` passes and the configuration is formatted. **`terraform apply` has not been
-run against Atlas**, because doing so safely requires the import above and Atlas API credentials.
-The Kubernetes resources are the exercised path; the Atlas resources are written and validated but
-not applied.
+`terraform validate` passes and the configuration is formatted. The Kubernetes resources are
+planned, applied and re-planned in CI on every change. **`terraform apply` has not been run against
+Atlas**, because doing so safely requires the import above and Atlas API credentials. The Atlas
+resources are written and validated but not applied; CI only asserts they stay out of the plan.
