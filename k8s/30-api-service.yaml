@@ -18,3 +18,10 @@ spec:
       targetPort: http   # the container's named port, so the pod can move off
                          # 8000 without touching this file
       protocol: TCP
+    # Scraped by Prometheus via k8s/monitoring/api-servicemonitor.yaml. The
+    # Ingress backend names port `http`, so this one is never reachable from
+    # outside the cluster.
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP

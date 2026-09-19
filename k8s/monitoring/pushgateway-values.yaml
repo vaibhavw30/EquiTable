@@ -1,0 +1,32 @@
+# Prometheus Pushgateway — the refresh CronJob's metrics sink (ADR-030).
+#
+#   helm upgrade --install pushgateway prometheus-community/prometheus-pushgateway \
+#     --version 3.8.0 -n monitoring -f k8s/monitoring/pushgateway-values.yaml
+#
+# Why it exists: the refresh pod runs for a few minutes every two weeks. A
+# pull-based scrape every 30s would catch it only by luck, and never after it
+# exits. The pod pushes once at the end of the run; the gateway holds the values
+# and Prometheus scrapes the gateway.
+
+fullnameOverride: pushgateway
+
+serviceMonitor:
+  enabled: true
+  # Keep the labels the pusher set (job="equitable_refresh", run_id=...).
+  # Without this Prometheus overwrites `job` with the gateway's own scrape job
+  # and every query has to use `exported_job`.
+  honorLabels: true
+
+# The gateway is the only copy of each run's counters until Prometheus scrapes
+# them, and it forgets everything on restart unless persisted. 1Gi on kind's
+# default local-path StorageClass costs nothing.
+persistentVolume:
+  enabled: true
+  size: 1Gi
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi

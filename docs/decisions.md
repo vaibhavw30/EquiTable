@@ -827,6 +827,75 @@ Three exclusions, each for a concrete reason:
 
 ---
 
+## ADR-030: Scraper Metrics — Pull for the API, Pushgateway for the CronJob
+
+**Date**: 2026-09-19
+**Status**: Accepted
+
+**Context**: The résumé carried a placeholder for "what fraction of pages Crawl4AI handles vs. the Jina fallback". The only existing evidence was `pantries.scrape_method`, which a read-only aggregation put at **95 Crawl4AI / 33 Jina / 7 unset** (74% / 26% of the 128 with a value). That number is real but narrow: it is the *last successful* tool per pantry. Failures are never written (persist only runs on success), each refresh overwrites the previous value, and `source_metrics` records success rate and latency per source but not which tool was used. So there was no per-attempt record, no failure count, and no history — nothing that answers "how often does the primary scraper need help?"
+
+The same `ScraperService` runs in two processes with opposite lifetimes: the API (long-lived Deployment, the discovery endpoint scrapes in-process) and the refresh agent (a CronJob pod that lives for minutes, fortnightly).
+
+**Options Considered**:
+| Criteria | Pull everywhere | Push everywhere (OTLP/remote-write) | Pull API + Pushgateway for the job |
+|----------|-----------------|--------------------------------------|------------------------------------|
+| Catches the CronJob | No — a 30s scrape interval misses a pod that exits between scrapes | Yes | Yes |
+| Extra infrastructure | None | A collector | One small Deployment |
+| Fits the API | Yes | Overkill | Yes |
+| Prometheus's own guidance | — | — | The documented use case for the Pushgateway: service-level batch jobs |
+
+**Decision**: Pull for the API, push for the job. Specifically:
+
+- **Two counters, not one.** `equitable_scrape_attempts_total{method,outcome}` counts every tool *tried*; `equitable_scrape_results_total{method}` counts the tool that *won* per URL (including `none`). Results is the split. `jina attempts / crawl4ai attempts` is the fallback trigger rate — which differs from the split, because a Jina attempt can itself fail.
+- **Outcomes derive from return values only** (`success` ≥ `MIN_CONTENT_CHARS`, `insufficient`, `failed`), and recording sits outside the decision logic, so instrumentation cannot change which tool wins. Every recording call swallows its own exceptions — tested by making the registry raise mid-scrape.
+- **The API serves `/metrics` on a separate port (9464), not a FastAPI route.** The Ingress forwards every path on the `http` port, so a route would publish metrics to the internet. Verified: `https://equitable.localtest.me/metrics` → 404; a pod in `default` times out on 9464; only Prometheus's pods in `monitoring` are allowed by NetworkPolicy. The listener only starts when `METRICS_PORT` is set, so local dev, Render and the test suite are unchanged.
+- **The agent pushes once, at the end, grouped by `run_id`.** A constant grouping key would make each run overwrite the last; per-run groups make `sum by (method)(...)` the cumulative split across every run the gateway holds. Cardinality is ~26 groups a year. `PUSHGATEWAY_URL` unset → no-op; push failure → a warning, never a failed run.
+- **A project-owned `CollectorRegistry`.** The push carries only project metrics (not the pusher's `process_*`), and tests read values without global-state noise. The API's scrape endpoint merges it with the default registry so `process_resident_memory_bytes` sits next to the 2Gi limit.
+
+**Consequences**:
+
+- Verified end-to-end on kind: a capped run (2 sources, $0.05 of Gemini) pushed `results{crawl4ai}=1, results{jina}=1` and `attempts{crawl4ai,insufficient}=1` — Crawl4AI came back short on one site and Jina took over — all visible in Prometheus with `job`/`run_id` intact.
+- **A crashed pod's attempts are not counted.** It never reaches the push. The resumed pod (same `run_id`, ADR-024) pushes and replaces the group. The durable per-pantry record is still `scrape_method` in Mongo; Prometheus is the operational view, not the ledger.
+- The Pushgateway is a single point where the job's metrics live until scraped, and it forgets on restart unless persisted — hence its 1Gi PVC. It also never expires groups; that is fine at 26/year and would not be for a per-minute job.
+- The résumé number should come from the dashboard once real fortnightly runs accumulate. Until then, the defensible statement is the Mongo aggregation above, worded as "share of pantries", not "share of attempts".
+
+**Re-evaluation trigger**: If the job ever runs often (hourly or more), stop grouping by `run_id` and push to a constant group with `pushadd`, or move the job to OTLP. If a third scraper tool is added, it gets metrics for free — the label is the fetcher's `name`.
+
+---
+
+## ADR-031: kube-prometheus-stack on kind, Trimmed
+
+**Date**: 2026-09-19
+**Status**: Accepted
+
+**Context**: ADR-030 needs a Prometheus, a Grafana, and kube-state-metrics (the only way to see "the refresh Job failed" after its pod is gone). It has to run on the same laptop kind cluster at $0.
+
+**Options Considered**:
+| Criteria | Hand-written Prometheus/Grafana manifests | kube-prometheus-stack (Helm) | Grafana Cloud free tier |
+|----------|------------------------------------------|------------------------------|-------------------------|
+| Scrape config lives next to the workload | No — one central prometheus.yml | Yes — ServiceMonitor CRDs | Via an agent |
+| Industry-standard | No | Yes | Yes |
+| Cost / data leaves laptop | $0 / no | $0 / no | $0 within limits / yes |
+| Footprint on kind | Smallest | ~1 GiB after trimming | Agent only |
+
+**Decision**: kube-prometheus-stack, chart pinned (91.4.1), heavily trimmed:
+
+- **Off**: Alertmanager (nowhere to page at $0 — the project's rules still evaluate and show at `/alerts`), node-exporter (describes OrbStack's VM, not this project), etcd/scheduler/controller-manager/kube-proxy scraping (kind binds them to localhost, so they would be permanently DOWN targets that train you to ignore red), the ~200 default rules and default dashboards (written for production control planes).
+- **`*SelectorNilUsesHelmValues: false`** so ServiceMonitors and rules in the app namespace are picked up without carrying the monitoring release's label.
+- **Grafana admin password is generated in-cluster** by the setup script (`openssl rand`) into a Secret. The chart's fallback (`prom-operator`) is public.
+- **The dashboard is JSON in the repo**, loaded by the Grafana sidecar from a labelled ConfigMap — not clicked together in a UI and lost with the cluster.
+- **Four alert rules**, the non-obvious one being `EquiTableRefreshJobFailed` on `kube_job_failed{condition="true"}`, *not* `kube_job_status_failed`: the latter counts failed pods, and a crash-then-resume (the case ADR-024 exists for) has a failed pod inside a Job that succeeded. Alerting on it would page on recovery working.
+
+**Consequences**:
+
+- All 17 targets UP on first install, including both API pods through the new NetworkPolicy.
+- The dashboard immediately surfaced something real: *Next scheduled run* read **−4.5 days**. The laptop cluster was off at 08:00 UTC on Sep 15, `startingDeadlineSeconds` (1h) expired, and `concurrencyPolicy: Forbid` drops rather than queues — so that fortnight's run simply did not happen. This is the strongest argument in the repo that a laptop is not a production scheduler, and it is now visible rather than silent. The panel goes red when negative.
+- Prometheus storage is an emptyDir (30d retention). Losing it loses graphs, not data — the Pushgateway PVC and Mongo hold the rest.
+
+**Re-evaluation trigger**: On a real cluster, turn Alertmanager back on with a receiver, give Prometheus a PVC, and re-enable node-exporter. If memory on the laptop becomes a problem, drop Grafana first — Prometheus's own UI answers every question the dashboard does.
+
+---
+
 ## Template for New Decisions
 
 ```markdown

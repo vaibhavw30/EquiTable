@@ -29,6 +29,8 @@ from crawl4ai import (
     URLPatternFilter,
 )
 
+from services import metrics
+
 logger = logging.getLogger("equitable")
 
 # Phrases that signal food-pantry-specific content
@@ -310,8 +312,20 @@ class ScraperService:
             return None
 
     async def scrape_with_provenance(self, url: str) -> ScrapeResult:
-        """Crawl4AI first; fall back through the chain; report which tool won."""
+        """Crawl4AI first; fall back through the chain; report which tool won.
+
+        Every tool tried is recorded as an attempt, and the tool whose content
+        is returned is recorded as the result (ADR-030). Recording reads only
+        the values already computed here; it never alters which tool wins.
+        """
+        result = await self._scrape_with_provenance(url)
+        metrics.record_result(result.method)
+        return result
+
+    async def _scrape_with_provenance(self, url: str) -> ScrapeResult:
+        start = time.monotonic()
         primary = await self._crawl4ai_scrape(url)
+        metrics.record_attempt("crawl4ai", primary, MIN_CONTENT_CHARS, time.monotonic() - start)
         if primary and len(primary.strip()) >= MIN_CONTENT_CHARS:
             return ScrapeResult(primary, "crawl4ai")
 
@@ -320,7 +334,9 @@ class ScraperService:
                 continue
             logger.info("Trying fallback fetcher",
                         extra={"event": "fallback_attempt", "url": url, "tool": fetcher.name})
+            start = time.monotonic()
             content = await fetcher.fetch(url)
+            metrics.record_attempt(fetcher.name, content, MIN_CONTENT_CHARS, time.monotonic() - start)
             if content and len(content.strip()) >= MIN_CONTENT_CHARS:
                 logger.info("Fallback succeeded",
                             extra={"event": "fallback_success", "url": url,

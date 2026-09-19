@@ -122,6 +122,12 @@ spec:
                 - name: HOME
                   value: /tmp
 
+                # End-of-run metrics push (ADR-030). If the gateway is down or
+                # not installed the push logs a warning and the run still
+                # succeeds — monitoring never fails a refresh.
+                - name: PUSHGATEWAY_URL
+                  value: "http://pushgateway.monitoring.svc:9091"
+
               # Sized from the ECS task that runs this exact code
               # (deploy/task-definition.json: 2 vCPU / 4 GiB). Requests are set
               # well below limits because the job is bursty — Chromium spikes

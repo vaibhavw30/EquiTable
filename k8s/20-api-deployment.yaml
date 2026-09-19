@@ -52,6 +52,11 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+            # Prometheus /metrics (ADR-030). A separate port, not a FastAPI
+            # route: the Ingress forwards every path on `http`, so a route
+            # would publish the metrics to the internet.
+            - name: metrics
+              containerPort: 9464
 
           envFrom:
             - configMapRef:
@@ -65,6 +70,10 @@ spec:
             # emptyDir. Crawl4AI and Playwright both write cache under $HOME.
             - name: HOME
               value: /tmp
+            # Starts the metrics listener; unset (local dev, Render, tests)
+            # means no listener at all.
+            - name: METRICS_PORT
+              value: "9464"
 
           # ── Probes ───────────────────────────────────────────────────────
           #

@@ -1,0 +1,103 @@
+# kube-prometheus-stack, trimmed for a 2-node kind cluster (ADR-031).
+#
+# Installed by scripts/k8s-monitoring-up.sh:
+#   helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+#     --version 91.4.1 -n monitoring -f k8s/monitoring/kube-prometheus-stack-values.yaml
+#
+# Kept: the Prometheus Operator (so scrape config is ServiceMonitor objects that
+# live next to the workload, not a hand-edited prometheus.yml), Prometheus,
+# Grafana, and kube-state-metrics (CronJob/Job/Deployment state — the only
+# signal for "the refresh job failed" that survives the pod being gone).
+#
+# Dropped: everything that either cannot work on kind or has nowhere to send.
+
+fullnameOverride: kps
+
+# No Alertmanager: there is nowhere to route a page to at $0. The rules in
+# prometheus-rules.yaml still evaluate and show as firing in the Prometheus UI
+# (/alerts) — wiring a receiver later is one values block, not a redesign.
+alertmanager:
+  enabled: false
+
+# Host-level metrics about kind's node containers describe OrbStack's VM, not
+# anything this project runs. Not worth a privileged hostNetwork DaemonSet.
+nodeExporter:
+  enabled: false
+
+# kind binds these control-plane components to 127.0.0.1 inside the node
+# container, so Prometheus can never reach them. Left on, they show as
+# permanently DOWN targets and train you to ignore red.
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false   # Calico, and kube-proxy's metrics port is localhost-only too
+
+# The stock rule pack is ~200 rules written for production control planes; most
+# reference the components disabled above. The project's own rules are in
+# prometheus-rules.yaml.
+defaultRules:
+  create: false
+
+prometheus:
+  prometheusSpec:
+    # By default the operator only picks up ServiceMonitors/rules carrying this
+    # Helm release's label. The project's monitors live in the app namespace and
+    # should not need to know the monitoring release's name.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+
+    # 30 days covers two refresh cycles, so "this run vs the last one" is
+    # always answerable. The durable history is Mongo (`scrape_method`), not
+    # this TSDB — it is an emptyDir and a kind cluster is disposable.
+    retention: 30d
+    retentionSize: 2GB
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 400Mi
+      limits:
+        memory: 1Gi
+
+grafana:
+  fullnameOverride: grafana
+  # Created by the setup script with a random password — never a committed
+  # default. The chart's fallback ("prom-operator") is public knowledge.
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  # Dashboards are ConfigMaps labelled grafana_dashboard=1; the sidecar loads
+  # them, so the dashboard JSON is version-controlled rather than clicked
+  # together in the UI and lost with the cluster.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+  defaultDashboardsEnabled: false   # the stock set assumes node-exporter + etcd
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 384Mi
+
+kube-state-metrics:
+  fullnameOverride: kube-state-metrics
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi

@@ -82,10 +82,11 @@ EquiTable/
 │   │   ├── discovery_service.py # Orchestrator: Places → dedup → scrape → store → SSE
 │   │   ├── ingestion_pipeline.py # Crawl4AI → Gemini → Validator pipeline
 │   │   ├── scraper.py          # Crawl4AI async web scraper
+│   │   ├── metrics.py          # Prometheus counters + Pushgateway push (ADR-030)
 │   │   ├── extractor.py        # Gemini LLM structured extraction
 │   │   └── validator.py        # Field-level validation rules
 │   ├── prompts/                # LLM system/example prompts
-│   ├── tests/                  # 240 backend tests
+│   ├── tests/                  # 258 backend tests
 │   └── requirements.txt
 ├── frontend/                   # React 19 + Vite 7
 │   └── src/
@@ -116,13 +117,15 @@ EquiTable/
 │   ├── 50-api-ingress.yaml     # TLS + SSE-friendly nginx annotations
 │   ├── 60-refresh-cronjob.yaml # The scheduled refresh; injects REFRESH_RUN_ID
 │   ├── 70-networkpolicy.yaml   # Deny-all baseline + narrow allows
-│   └── kind/cluster.yaml       # Local cluster (default CNI disabled, Calico)
+│   ├── kind/cluster.yaml       # Local cluster (default CNI disabled, Calico)
+│   └── monitoring/             # Helm values, ServiceMonitor, alert rules, dashboard JSON
 ├── scripts/
 │   ├── k8s-up.sh               # Stand the whole stack up from scratch
+│   ├── k8s-monitoring-up.sh    # Prometheus + Grafana + Pushgateway
 │   └── k8s-tls-secret.sh       # Self-signed cert for the local Ingress
 ├── deploy/                     # Legacy ECS task-def + IAM policies (ADR-019)
 ├── docs/
-│   ├── decisions.md            # Architecture Decision Records (ADR-001 to ADR-028)
+│   ├── decisions.md            # Architecture Decision Records (ADR-001 to ADR-031)
 │   └── seed-strategy.md        # Multi-city expansion plan
 └── README.md
 ```
@@ -217,6 +220,40 @@ kubectl create job -n equitable --from=cronjob/equitable-refresh manual-$(date +
 kubectl logs -n equitable -l app.kubernetes.io/component=refresh-agent --follow
 ```
 
+### Monitoring: Prometheus + Grafana
+
+```bash
+./scripts/k8s-monitoring-up.sh
+kubectl port-forward -n monitoring svc/grafana 3000:80   # http://localhost:3000/d/equitable-scraper
+kubectl get secret grafana-admin -n monitoring -o jsonpath='{.data.admin-password}' | base64 -d; echo
+```
+
+The scraper is instrumented to answer "how often does Crawl4AI need the Jina fallback?" with
+per-attempt counters rather than a guess (ADR-030):
+
+- `equitable_scrape_attempts_total{method,outcome}`: every tool *tried*, labelled `success`,
+  `insufficient` or `failed`.
+- `equitable_scrape_results_total{method}`: the tool that *won* for each URL (or `none`). This is the
+  split.
+- `equitable_scrape_duration_seconds{method}`: per-attempt latency.
+
+The two processes report differently. The **API** is scraped (pulled) on port 9464, which is not a
+route: the Ingress forwards every path, so a `/metrics` route would be public. The port is reachable
+only from Prometheus's pods (NetworkPolicy). The **refresh CronJob** lives for minutes every two
+weeks, which a 30s scrape would miss, so it **pushes once at the end of the run** to a Pushgateway,
+grouped by `run_id`. Both are off unless `METRICS_PORT` / `PUSHGATEWAY_URL` are set, and a failed
+push never fails a run.
+
+The stack is kube-prometheus-stack, trimmed for kind: no Alertmanager, node-exporter or
+control-plane scraping, and 4 project alert rules (ADR-031). The dashboard JSON lives in
+`k8s/monitoring/dashboards/` and is loaded by Grafana's sidecar.
+
+**What the numbers say so far.** Across the pantry records in Atlas (last successful tool per
+pantry), **74% came from Crawl4AI and 26% from the Jina fallback** (95 / 33 of 128). The Prometheus
+counters add what that record can't: failures, per-attempt fallback rate, and history across runs.
+They have one verified capped run so far, so the dashboard number should be taken over the Mongo
+one only after several fortnightly runs.
+
 ### Exercise the failure modes
 
 These are the behaviors worth checking, because each one is a claim that would otherwise be
@@ -303,6 +340,10 @@ Being honest about the boundary matters more than the demo:
 - **The HPA scales on CPU, which is the wrong signal here.** The API is I/O-bound; it will saturate
   on concurrent scrapes and Mongo round-trips long before CPU reaches the 70% target. CPU is what
   `autoscaling/v2` offers without a custom-metrics adapter. Known weakness, not an oversight.
+- **A laptop is not a scheduler.** The dashboard showed the Sep 15 run was simply missed: the
+  cluster was off at fire time, `startingDeadlineSeconds` (1h) expired, and `Forbid` drops rather
+  than queues. The *Next scheduled run* panel goes red when this happens. On ECS/EventBridge it would
+  not have been missed.
 - **Resume is at node granularity, not per source** (ADR-020, ADR-024). A crash mid-fan-out
   re-executes the whole `process_sources` node and re-scrapes that run's selected sources. This is
   safe — upserts are idempotent and the 24h freshness floor makes re-refreshes no-ops — but it is
@@ -368,6 +409,14 @@ Third, the in-memory per-IP rate limiter is per-pod, so it silently multiplies b
 it needs shared state. Fourth, resume granularity: a crash mid-fan-out currently re-scrapes the
 whole batch, which is cheap at 25 sources and not at 2,500.
 
+**How do you know the Crawl4AI/Jina split?**
+Two sources, with different meanings. Mongo's `scrape_method` gives the last successful tool per
+pantry: 74% Crawl4AI / 26% Jina. The honest limits are that failures are never written and every
+run overwrites the last. Prometheus counts every attempt and every outcome per run, including
+`none`. The job is short-lived, so it pushes to a Pushgateway grouped by `run_id`; a constant key
+would make each run overwrite the previous one. The metric I'd actually alert on is the fallback
+trigger rate, because Crawl4AI degrading shows up there before pantries go stale. (ADR-030)
+
 **What do you still not know?**
 This has never run under real traffic. Everything here was verified on a two-node kind cluster on a
 laptop, so it proves the manifests are correct and the failure modes behave as designed — and
@@ -413,7 +462,7 @@ VITE_API_URL=http://127.0.0.1:8000   # Backend API URL
 ## Testing
 
 ```bash
-# Backend — 240 tests
+# Backend — 258 tests
 cd backend_ml
 source venv/bin/activate
 python -m pytest tests/ -v
@@ -446,6 +495,7 @@ npm run test
 - **Vercel** — Frontend hosting
 - **Render** — Backend hosting (being migrated to Kubernetes, ADR-022)
 - **Kubernetes** — API Deployment + refresh CronJob, local `kind` cluster
+- **Prometheus + Grafana** — kube-prometheus-stack + Pushgateway for the CronJob (ADR-030/031)
 - **AWS ECS Fargate + EventBridge** — the refresh agent's current production home (ADR-019)
 
 ## Cost
@@ -459,6 +509,7 @@ The system as a whole is **not** $0. Current running cost is roughly **$1.50–3
 |---|---|---|
 | AWS ECS Fargate + EventBridge | ~$1–2/mo | The refresh agent's production home (ADR-019). Public subnet, no NAT — a NAT Gateway would be ~$32/mo and dwarf the job. |
 | Gemini (refresh runs) | ~$0.50–1/mo | Capped per run by `REFRESH_MAX_COST_USD` |
+| Prometheus / Grafana | $0 | In-cluster on kind; nothing leaves the laptop (ADR-031) |
 | Kubernetes (local `kind`) | $0 | Runs on the laptop. A managed control plane would be ~$72/mo before any nodes. |
 | Scraping | $0 | Crawl4AI → Jina fallback (ADR-021) |
 
@@ -475,7 +526,7 @@ Everything below is free at current volume:
 
 ## Architecture Decisions
 
-Key decisions are documented in `docs/decisions.md` (ADR-001 through ADR-028). Highlights:
+Key decisions are documented in `docs/decisions.md` (ADR-001 through ADR-031). Highlights:
 
 - **ADR-008**: Crawl4AI replaces Firecrawl as primary scraper ($0 cost vs $0.01/page)
 - **ADR-011**: Google Places API (New) for pantry discovery
@@ -484,6 +535,7 @@ Key decisions are documented in `docs/decisions.md` (ADR-001 through ADR-028). H
 - **ADR-022**: Kubernetes for the API + refresh agent (supersedes ADR-019's topology)
 - **ADR-024**: A stable `thread_id` — making resume-on-crash actually work
 - **ADR-025**: Real health probes, and why liveness must not check MongoDB
+- **ADR-030**: Scraper metrics — pull for the API, Pushgateway for the CronJob
 
 ## License
 

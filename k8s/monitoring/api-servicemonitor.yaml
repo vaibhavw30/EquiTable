@@ -1,0 +1,22 @@
+# Tells the Prometheus Operator to scrape the API pods' metrics port.
+# Lives in the app namespace, next to what it scrapes; the kube-prometheus-stack
+# values set serviceMonitorSelectorNilUsesHelmValues=false so it is picked up
+# without carrying the monitoring release's label.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: equitable-api
+  namespace: equitable
+  labels:
+    app.kubernetes.io/name: equitable
+    app.kubernetes.io/component: api
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: equitable
+      app.kubernetes.io/component: api
+  endpoints:
+    # The Service's `metrics` port — never routed by the Ingress (ADR-030).
+    - port: metrics
+      path: /metrics
+      interval: 30s

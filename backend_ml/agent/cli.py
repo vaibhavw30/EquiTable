@@ -19,6 +19,7 @@ scraping. Instead test the graph directly with FakeScraper + FakeModelFactory
 import asyncio
 import logging
 import os
+import time
 import uuid
 
 from agent.config import MAX_COST_USD, CURATOR_MODEL, setup_langsmith
@@ -117,6 +118,7 @@ async def run_refresh(db_name: str | None = None) -> dict:
 
     await connect_to_mongo()
 
+    started = time.monotonic()
     run_id = resolve_run_id()
     logger.info(
         "Refresh starting",
@@ -182,6 +184,11 @@ async def run_refresh(db_name: str | None = None) -> dict:
             "cost_spent_usd": round(final.get("cost_spent_usd", 0.0), 4),
         },
     )
+
+    # One push at the end of the run (ADR-030). No-op unless PUSHGATEWAY_URL is
+    # set, and never raises — a monitoring outage must not fail the refresh.
+    from services.metrics import push_refresh_metrics
+    push_refresh_metrics(run_id, final, time.monotonic() - started)
     return final
 
 

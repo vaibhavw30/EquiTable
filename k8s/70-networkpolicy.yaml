@@ -107,3 +107,58 @@ spec:
       ports:
         - protocol: TCP
           port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-to-api-metrics
+  namespace: equitable
+spec:
+  # Prometheus scrapes the API's metrics port — and only that port. Allowing
+  # the monitoring namespace onto 8000 as well would let it (or anything
+  # compromised in it) call the application API from inside the cluster.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: equitable
+      app.kubernetes.io/component: api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9464
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-refresh-to-pushgateway
+  namespace: equitable
+spec:
+  # The refresh pod's one in-cluster destination. allow-external-egress
+  # excludes 10.0.0.0/8 on purpose (SSRF), so without this narrow hole the
+  # end-of-run push times out — and, by design, the run still succeeds, so the
+  # only symptom would be a dashboard that never updates.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: equitable
+      app.kubernetes.io/component: refresh-agent
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus-pushgateway
+      ports:
+        - protocol: TCP
+          port: 9091

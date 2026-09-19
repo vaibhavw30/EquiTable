@@ -29,6 +29,7 @@ from models.pantry import Pantry, PantryStatus
 from services.discovery_service import DiscoveryService, clear_job_state
 from services.ingestion_pipeline import IngestionPipeline, IngestionError
 from services.llm import get_llm_service
+from services.metrics import start_metrics_server_from_env
 from services.places_client import PlacesClient, PlacesAPIError
 from services.scraper import get_scraper_service
 
@@ -39,6 +40,13 @@ logger = logging.getLogger("equitable")
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown events"""
     # Startup
+    # Metrics are observational: a port clash must not take the API down.
+    try:
+        start_metrics_server_from_env()
+    except Exception as e:
+        logger.warning("Metrics server failed to start",
+                       extra={"event": "metrics_server_failed", "error": str(e)})
+
     try:
         await connect_to_mongo()
         logger.info("Database connection established", extra={"event": "startup_complete"})

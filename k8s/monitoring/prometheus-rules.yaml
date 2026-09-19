@@ -1,0 +1,55 @@
+# Project alert rules. With Alertmanager disabled (ADR-031) these evaluate and
+# show as pending/firing at Prometheus /alerts; nothing pages.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: equitable
+  namespace: equitable
+  labels:
+    app.kubernetes.io/name: equitable
+spec:
+  groups:
+    - name: equitable-refresh
+      rules:
+        # kube_job_failed, not kube_job_status_failed: the latter counts failed
+        # PODS, and a crash-then-resume (the case resume-on-crash exists for)
+        # has one failed pod inside a Job that succeeded. Alerting on that would
+        # page on the recovery working.
+        - alert: EquiTableRefreshJobFailed
+          expr: kube_job_failed{namespace="equitable", job_name=~"equitable-refresh-.*|manual-.*", condition="true"} == 1
+          labels:
+            severity: warning
+          annotations:
+            summary: "Refresh Job {{ $labels.job_name }} failed after all retries"
+            description: "backoffLimit or activeDeadlineSeconds exhausted. `kubectl logs -n equitable job/{{ $labels.job_name }}`."
+
+        # Schedule is the 1st and 15th, so the widest normal gap is 16 days.
+        # 17 days means at least one scheduled run did not succeed.
+        - alert: EquiTableRefreshStale
+          expr: time() - kube_cronjob_status_last_successful_time{namespace="equitable", cronjob="equitable-refresh"} > 17 * 86400
+          labels:
+            severity: warning
+          annotations:
+            summary: "No successful refresh in over 17 days"
+
+        # The split drifting toward Jina means Crawl4AI is degrading (Chromium
+        # breakage, sites adding bot walls). Jina is free but rate-limited, so a
+        # run leaning on it is a run close to failing.
+        - alert: EquiTableJinaFallbackHigh
+          expr: |
+            sum(equitable_scrape_results_total{job="equitable_refresh", method="jina"})
+              / sum(equitable_scrape_results_total{job="equitable_refresh"}) > 0.5
+          labels:
+            severity: info
+          annotations:
+            summary: "Over half of refreshed pages came from the Jina fallback"
+
+    - name: equitable-api
+      rules:
+        - alert: EquiTableApiNoReadyPods
+          expr: kube_deployment_status_replicas_available{namespace="equitable", deployment="equitable-api"} < 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "No API pod is Ready — readiness is failing (MongoDB unreachable?)"
