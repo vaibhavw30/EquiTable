@@ -95,6 +95,7 @@ aws ecr delete-repository --repository-name equitable-refresh --force --region $
 ```
 
 ## Known follow-ups
-- **Curator LLM ranker** falls back to deterministic staleness ordering every run (non-blocking; tracked separately). The agent still selects + refreshes correctly.
+- ~~**Curator LLM ranker** falls back to deterministic staleness ordering every run~~ — fixed: the ranker uses structured output (Gemini 3 returns content blocks, not a string).
+- **No metrics from ECS.** The task definition does not set `PUSHGATEWAY_URL`, so ECS runs push nothing (by design — the Pushgateway is in-cluster). Scraper metrics come from the Kubernetes CronJob path (ADR-030); the durable per-pantry record on both paths is `pantries.scrape_method`.
 - **Atlas network access is `0.0.0.0/0`** (Fargate IP is dynamic). Security rests on the DB password + TLS. Tighten via PrivateLink (Atlas M10+) if needed.
 - **AWS root credentials** were used for setup; consider switching to a scoped IAM user.

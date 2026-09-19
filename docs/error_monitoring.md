@@ -222,6 +222,10 @@ For now, `console.error` is sufficient. When the project grows, consider adding 
 
 ## Health Monitoring
 
+> **Implemented differently (ADR-025).** Kubernetes uses two probes instead of one enriched `GET /`:
+> `GET /healthz/live` (process only, never touches Mongo) and `GET /healthz/ready` (Mongo ping with a
+> 2s budget, 503 on failure). `GET /` is unchanged. The sketch below is the original plan.
+
 ### Backend Health Check
 
 The existing `GET /` endpoint serves as a basic health check. Enhance it slightly:
@@ -249,6 +253,32 @@ Use a free uptime monitor to alert if Render's free tier goes down and doesn't w
 
 - **UptimeRobot** (free, 5-min intervals) — ping `GET /` on the Render URL
 - This also keeps the Render free tier warm, reducing cold starts
+
+## Metrics (Prometheus) — ADR-030
+
+Logs answer "what happened to this request"; metrics answer "how often, over time". Implemented in
+`backend_ml/services/metrics.py`:
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `equitable_scrape_attempts_total` | counter | `method`, `outcome` | Every scraper tool tried: `success` / `insufficient` / `failed` |
+| `equitable_scrape_results_total` | counter | `method` | Tool whose content was used per URL (or `none`) — the split |
+| `equitable_scrape_duration_seconds` | histogram | `method` | Per-attempt latency |
+| `equitable_refresh_sources` | gauge (pushed) | `outcome`, `run_id` | Per refresh run: success / failed / skipped_budget |
+| `equitable_refresh_cost_usd`, `_duration_seconds`, `_last_completion_timestamp_seconds` | gauge (pushed) | `run_id` | Per refresh run |
+
+Patterns to follow when adding metrics:
+
+- **Observe, don't steer.** Record from values already computed, outside the branch that decides
+  behavior. Every recording call catches its own exceptions — a metrics bug must never fail a scrape.
+- **Long-lived process → pull; batch job → push.** The API serves `/metrics` on `METRICS_PORT`
+  (9464 in k8s), a separate port so the Ingress can't publish it. The refresh CronJob pushes once at
+  the end of the run to `PUSHGATEWAY_URL`, grouped by `run_id`.
+- **Off by default.** Both are env-gated; unset means no listener and no push.
+- **Assert deltas in tests.** Counters are process-global; see `tests/test_prometheus_metrics.py`.
+
+Alerts live in `k8s/monitoring/prometheus-rules.yaml` (job failed, refresh stale >17d, Jina share
+>50%, no ready API pods). The dashboard is `k8s/monitoring/dashboards/equitable-scraper.json`.
 
 ## Testing the Error Handling
 

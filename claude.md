@@ -7,7 +7,9 @@ EquiTable — AI-powered food pantry discovery platform. Scrapes pantry websites
 ## Quick Context
 
 - **Frontend**: React 19 + Vite 7, Tailwind CSS 4, Framer Motion, Google Maps API → deployed on Vercel
-- **Backend**: FastAPI (Python 3.10+), Motor (async MongoDB), Gemini 2.0 Flash, Firecrawl → deployed on Render
+- **Backend**: FastAPI (Python 3.10+), Motor (async MongoDB), Gemini 3 (3-tier model ladder), Crawl4AI → Jina Reader fallback → deployed on Render; also runs on Kubernetes (`k8s/`, local kind)
+- **Refresh agent**: LangGraph + MongoDB checkpointer (`backend_ml/agent/`) → AWS ECS Fargate + EventBridge (production), and a Kubernetes CronJob
+- **Observability**: structured JSON logs, LangSmith traces, Prometheus metrics (`services/metrics.py`) + Grafana dashboard (`k8s/monitoring/`) — ADR-030/031
 - **Database**: MongoDB Atlas with 2dsphere geospatial indexing
 
 ## Agent System
@@ -79,3 +81,7 @@ Read these before making decisions or implementing features:
 ## Current Phase
 
 Phase 2: Scraping Quality Overhaul → then Phase 1: Multi-City Expansion. See `agents/planner-tech-advisor.md` for full roadmap.
+
+Infra track (2026-09): API + refresh agent on Kubernetes (ADR-022–028), Terraform for namespace + Atlas (ADR-029), Prometheus/Grafana scraper instrumentation (ADR-030–031). Latest ADR is **ADR-031** — number new ones from there.
+
+Rules for metrics: record from return values, outside the decision logic; never raise into the caller; new env-gated listeners/pushers must be off by default so local dev, Render and tests are unchanged.

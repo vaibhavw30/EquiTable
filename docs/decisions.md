@@ -890,6 +890,7 @@ The same `ScraperService` runs in two processes with opposite lifetimes: the API
 
 - All 17 targets UP on first install, including both API pods through the new NetworkPolicy.
 - The dashboard immediately surfaced something real: *Next scheduled run* read **−4.5 days**. The laptop cluster was off at 08:00 UTC on Sep 15, `startingDeadlineSeconds` (1h) expired, and `concurrencyPolicy: Forbid` drops rather than queues — so that fortnight's run simply did not happen. This is the strongest argument in the repo that a laptop is not a production scheduler, and it is now visible rather than silent. The panel goes red when negative.
+- **The first memory limit was wrong.** Grafana was set to 384Mi and was OOMKilled the first time a browser opened the dashboard: plugin loading spikes well past its ~200Mi idle. The symptom was every panel reading "Error loading: plugin" plus a dropped port-forward, which looks like a broken dashboard rather than a dead pod. `kubectl get pod` showed `OOMKilled, exit 137`; the limit is now 1Gi with a 256Mi request. Same lesson as ADR-026: an idle measurement says nothing about the spike.
 - Prometheus storage is an emptyDir (30d retention). Losing it loses graphs, not data — the Pushgateway PVC and Mongo hold the rest.
 
 **Re-evaluation trigger**: On a real cluster, turn Alertmanager back on with a receiver, give Prometheus a PVC, and re-enable node-exporter. If memory on the laptop becomes a problem, drop Grafana first — Prometheus's own UI answers every question the dashboard does.

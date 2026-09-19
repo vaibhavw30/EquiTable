@@ -84,12 +84,14 @@ grafana:
       label: grafana_dashboard
       labelValue: "1"
   defaultDashboardsEnabled: false   # the stock set assumes node-exporter + etcd
+  # 384Mi was too low: Grafana 12 was OOMKilled the first time a browser
+  # opened the dashboard (plugin loading spikes well past its ~200Mi idle).
   resources:
     requests:
       cpu: 50m
-      memory: 128Mi
+      memory: 256Mi
     limits:
-      memory: 384Mi
+      memory: 1Gi
 
 kube-state-metrics:
   fullnameOverride: kube-state-metrics
