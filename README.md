@@ -119,13 +119,17 @@ EquiTable/
 │   ├── 70-networkpolicy.yaml   # Deny-all baseline + narrow allows
 │   ├── kind/cluster.yaml       # Local cluster (default CNI disabled, Calico)
 │   └── monitoring/             # Helm values, ServiceMonitor, alert rules, dashboard JSON
+├── terraform/                  # Namespace, ServiceAccounts, ConfigMap, Atlas (ADR-029)
+├── .github/workflows/
+│   └── terraform.yml           # Plan gate: plan → apply → re-plan on throwaway kind (ADR-032)
 ├── scripts/
 │   ├── k8s-up.sh               # Stand the whole stack up from scratch
 │   ├── k8s-monitoring-up.sh    # Prometheus + Grafana + Pushgateway
-│   └── k8s-tls-secret.sh       # Self-signed cert for the local Ingress
+│   ├── k8s-tls-secret.sh       # Self-signed cert for the local Ingress
+│   └── check-tf-yaml-parity.sh # Terraform ↔ k8s/ YAML drift check (run in CI)
 ├── deploy/                     # Legacy ECS task-def + IAM policies (ADR-019)
 ├── docs/
-│   ├── decisions.md            # Architecture Decision Records (ADR-001 to ADR-031)
+│   ├── decisions.md            # Architecture Decision Records (ADR-001 to ADR-032)
 │   └── seed-strategy.md        # Multi-city expansion plan
 └── README.md
 ```
@@ -477,6 +481,11 @@ cd frontend
 npm run test
 ```
 
+CI (GitHub Actions) currently gates infrastructure only: every change to `terraform/` or the
+YAML it duplicates is formatted, validated, planned, applied to a throwaway kind cluster,
+re-planned (must be a no-op), and checked for drift against `k8s/` (ADR-032). The test suites
+above are not yet run in CI.
+
 ## Tech Stack
 
 ### Backend
@@ -501,6 +510,7 @@ npm run test
 - **Render** — Backend hosting (being migrated to Kubernetes, ADR-022)
 - **Kubernetes** — API Deployment + refresh CronJob, local `kind` cluster
 - **Prometheus + Grafana** — kube-prometheus-stack + Pushgateway for the CronJob (ADR-030/031)
+- **Terraform + GitHub Actions** — namespace-scoped config + Atlas as code, plan-gated in CI (ADR-029/032)
 - **AWS ECS Fargate + EventBridge** — the refresh agent's current production home (ADR-019)
 
 ## Cost
@@ -531,7 +541,7 @@ Everything below is free at current volume:
 
 ## Architecture Decisions
 
-Key decisions are documented in `docs/decisions.md` (ADR-001 through ADR-031). Highlights:
+Key decisions are documented in `docs/decisions.md` (ADR-001 through ADR-032). Highlights:
 
 - **ADR-008**: Crawl4AI replaces Firecrawl as primary scraper ($0 cost vs $0.01/page)
 - **ADR-011**: Google Places API (New) for pantry discovery
@@ -541,6 +551,7 @@ Key decisions are documented in `docs/decisions.md` (ADR-001 through ADR-031). H
 - **ADR-024**: A stable `thread_id` — making resume-on-crash actually work
 - **ADR-025**: Real health probes, and why liveness must not check MongoDB
 - **ADR-030**: Scraper metrics — pull for the API, Pushgateway for the CronJob
+- **ADR-032**: Terraform plan gate in CI — against a throwaway kind cluster, no credentials
 
 ## License
 

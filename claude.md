@@ -82,6 +82,8 @@ Read these before making decisions or implementing features:
 
 Phase 2: Scraping Quality Overhaul → then Phase 1: Multi-City Expansion. See `agents/planner-tech-advisor.md` for full roadmap.
 
-Infra track (2026-09): API + refresh agent on Kubernetes (ADR-022–028), Terraform for namespace + Atlas (ADR-029), Prometheus/Grafana scraper instrumentation (ADR-030–031). Latest ADR is **ADR-031** — number new ones from there.
+Infra track (2026-09): API + refresh agent on Kubernetes (ADR-022–028), Terraform for namespace + Atlas (ADR-029), Prometheus/Grafana scraper instrumentation (ADR-030–031), Terraform plan gate in GitHub Actions against a throwaway kind cluster (ADR-032). Latest ADR is **ADR-032** — number new ones from there.
+
+Rules for Terraform: the namespace, ServiceAccounts and ConfigMap live in both `terraform/kubernetes.tf` and `k8s/` — change both or `scripts/check-tf-yaml-parity.sh` fails CI; `manage_atlas` must stay `false` by default (CI rejects any plan containing Atlas resources).
 
 Rules for metrics: record from return values, outside the decision logic; never raise into the caller; new env-gated listeners/pushers must be off by default so local dev, Render and tests are unchanged.

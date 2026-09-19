@@ -1,0 +1,143 @@
+# Terraform plan gate (ADR-032).
+#
+# Every change to terraform/ — or to the k8s/ YAML that duplicates what
+# Terraform owns — is planned against a real, throwaway kind cluster, applied
+# there, re-planned, and checked for parity with the YAML. Nothing here touches
+# a real environment: no cloud credentials, no Atlas keys, no remote state.
+name: terraform
+
+on:
+  pull_request:
+    paths: &paths
+      - "terraform/**"
+      - "k8s/00-namespace.yaml"
+      - "k8s/10-configmap.yaml"
+      - "k8s/15-serviceaccounts.yaml"
+      - "scripts/check-tf-yaml-parity.sh"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths: *paths
+  workflow_dispatch:
+
+# Read-only token. The plan goes to the job summary rather than a PR comment,
+# which would need pull-requests: write — and would not work for fork PRs anyway.
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TERRAFORM_VERSION: "1.16.0"
+
+defaults:
+  run:
+    working-directory: terraform
+
+jobs:
+  static:
+    name: fmt + validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Third-party actions are pinned to a commit SHA, not a tag: tags are
+      # mutable, and this job runs with the repo checked out.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform validate
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  plan:
+    name: plan → apply → re-plan (kind)
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          # The wrapper swallows exit codes into outputs; -detailed-exitcode
+          # below needs the real one.
+          terraform_wrapper: false
+
+      # Named "equitable" so the context is kind-equitable — the exact context
+      # providers.tf pins. The CI plan exercises the real provider config, not a
+      # CI-only override of it.
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          cluster_name: equitable
+
+      - name: terraform init
+        run: terraform init
+
+      - name: terraform plan
+        run: |
+          terraform plan -out=tfplan -no-color | tee plan.txt
+          {
+            echo "## terraform plan (against an empty kind cluster)"
+            echo
+            echo '```'
+            terraform show -no-color tfplan
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # manage_atlas defaults to false, and that default is what stands between
+      # a careless apply and the production database (atlas.tf). If a change
+      # flips it, the plan will contain Atlas resources — fail before anyone
+      # reads past it.
+      - name: assert the Atlas guard is still off
+        run: |
+          atlas=$(terraform show -json tfplan \
+            | jq '[.resource_changes[]? | select(.type | startswith("mongodbatlas_"))] | length')
+          if [ "$atlas" -ne 0 ]; then
+            echo "::error::Plan contains $atlas Atlas resource(s). manage_atlas must default to false; see terraform/atlas.tf."
+            exit 1
+          fi
+          echo "no Atlas resources in plan"
+
+      - name: terraform apply (ephemeral cluster only)
+        run: terraform apply -no-color tfplan
+
+      # Converges, or it doesn't. A second plan after apply must be empty; any
+      # diff means a provider-computed field or a perpetual change that would
+      # show up as noise on every real plan and bury the one that matters.
+      - name: re-plan must be a no-op
+        run: |
+          set +e
+          terraform plan -detailed-exitcode -no-color > replan.txt
+          code=$?
+          set -e
+          if [ "$code" -eq 2 ]; then
+            cat replan.txt
+            echo "::error::Plan is not idempotent: changes remain after apply."
+            exit 1
+          fi
+          [ "$code" -eq 0 ] || { cat replan.txt; exit "$code"; }
+          echo "re-plan clean: no changes"
+
+      # The namespace, ServiceAccounts and ConfigMap are also defined in k8s/
+      # for scripts/k8s-up.sh. Two definitions of one object drift unless
+      # something checks them.
+      - name: Terraform ↔ k8s/ YAML parity
+        working-directory: .
+        run: ./scripts/check-tf-yaml-parity.sh kind-equitable

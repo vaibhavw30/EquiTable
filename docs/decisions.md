@@ -822,6 +822,7 @@ Three exclusions, each for a concrete reason:
 - The provider pins `config_context = "kind-equitable"` instead of following the current kubectl context. An apply landing on an unintended cluster is the most expensive available mistake, and defaulting to "whatever is current" invites exactly that.
 - Two tools now touch the same namespace: Terraform creates it, kubectl fills it. The boundary is documented in `terraform/README.md` and holds as long as nobody adds workload resources to HCL.
 - **`terraform apply` has not been run against Atlas.** `terraform init` and `terraform validate` pass and the config is formatted, but the Atlas resources are unexercised — they need the import and API credentials first. The Kubernetes half is the tested path. Saying the infrastructure "is in Terraform" without that qualifier would overstate it.
+- *Update (ADR-032)*: the Kubernetes half is now planned, applied and re-planned in CI on every change, against a throwaway kind cluster; Atlas remains validate-only.
 
 **Re-evaluation trigger**: Before a second person can apply, enable the S3 backend — unlocked shared state is a corruption waiting to happen. If Atlas is ever recreated from scratch, do it through Terraform so the import dance is never needed again.
 
@@ -894,6 +895,53 @@ The same `ScraperService` runs in two processes with opposite lifetimes: the API
 - Prometheus storage is an emptyDir (30d retention). Losing it loses graphs, not data — the Pushgateway PVC and Mongo hold the rest.
 
 **Re-evaluation trigger**: On a real cluster, turn Alertmanager back on with a receiver, give Prometheus a PVC, and re-enable node-exporter. If memory on the laptop becomes a problem, drop Grafana first — Prometheus's own UI answers every question the dashboard does.
+
+---
+
+## ADR-032: Terraform Plan Gate in CI — Against a Throwaway kind Cluster
+
+**Date**: 2026-09-19
+**Status**: Accepted
+
+**Context**: ADR-029 put the namespace, ServiceAccounts, ConfigMap and Atlas under Terraform so that infrastructure changes get reviewed like code — and then nothing reviewed them. There was no CI at all. `terraform validate` had only ever been run by hand, and "the plan" existed only on whichever laptop last ran it.
+
+Two further problems a plan gate alone would not catch:
+
+- **Duplicated objects.** The same namespace, ServiceAccounts and ConfigMap are defined twice: in `terraform/kubernetes.tf` and in `k8s/` (for `scripts/k8s-up.sh`). Edit one and not the other, and the next `terraform apply` and the next `k8s-up.sh` silently overwrite each other.
+- **The Atlas guard is a default, not a lock.** `manage_atlas = false` is the only thing keeping a careless apply away from the production database (ADR-029). A PR that flips the default looks like a one-word change.
+
+The constraint is the same as everywhere else in this project: $0, and nothing in CI may touch a real environment.
+
+**Options Considered**:
+| Criteria | fmt + validate only | Plan against a throwaway kind cluster (chosen) | Plan against the real cluster/Atlas | Terraform Cloud / Atlantis |
+|----------|---------------------|-----------------------------------------------|-------------------------------------|----------------------------|
+| Catches provider/schema errors | Partly | Yes — real provider, real API server | Yes | Yes |
+| Proves the config converges (apply → no-op re-plan) | No | **Yes** | Only by applying to prod | Yes |
+| Credentials in CI | None | **None** | Kubeconfig + Atlas keys | Stored in the service |
+| Shows the diff against what actually exists | No | No — always "4 to add" | **Yes** | Yes |
+| Cost / new moving parts | $0 / none | $0 / none | $0 / a reachable cluster | $0–$ / a service to run |
+
+**Decision**: `.github/workflows/terraform.yml`, two jobs, on every PR touching `terraform/**`, the three twin YAML files, the parity script, or the workflow itself:
+
+1. **`fmt + validate`** — `terraform fmt -check -recursive` and `validate` with `-backend=false`.
+2. **plan → apply → re-plan on kind.** `helm/kind-action` creates a cluster named `equitable`, so its context is `kind-equitable` — the exact context `providers.tf` pins. CI exercises the real provider config, not a CI-only override. Then:
+   - `terraform plan`, rendered into the job summary. Not a PR comment: that needs `pull-requests: write` and does not work for fork PRs; the token stays `contents: read`.
+   - **Atlas guard**: fail if the plan contains any `mongodbatlas_*` resource. This turns ADR-029's "load-bearing default" into an enforced one.
+   - `terraform apply` to the ephemeral cluster, then **`plan -detailed-exitcode` must exit 0**. A non-empty re-plan means a perpetual diff, which would show up on every real plan and bury the change that matters.
+   - **`scripts/check-tf-yaml-parity.sh`** compares the Terraform-applied objects against the `k8s/` YAML field by field.
+
+Why a custom parity script instead of `kubectl diff`: `kubectl diff` only reports fields the YAML *sets* that differ from the cluster. A key Terraform sets and the YAML has *dropped* is invisible to it — deleting `JINA_ENABLED` from the YAML diffs clean. The script compares the owned fields (ConfigMap `.data`, namespace labels, `automountServiceAccountToken`) for exact equality.
+
+Supply-chain hygiene: all three third-party actions are pinned to commit SHAs (tags are mutable, and the job runs with the repo checked out), checkout uses `persist-credentials: false`, and `terraform_wrapper: false` so `-detailed-exitcode` sees the real exit code. `.terraform.lock.hcl` carries hashes for `linux_amd64`, `darwin_arm64` and `darwin_amd64`, so CI's `init` verifies providers against committed hashes rather than trusting whatever the registry serves.
+
+**Consequences**:
+
+- Rehearsed locally end to end on a fresh kind cluster with the context renamed to `kind-equitable` — same steps, same order: fmt clean, validate clean, plan "4 to add", Atlas guard 0, apply, re-plan exit 0, parity 4/4 ok. Then each gate was broken on purpose: removing a ConfigMap key from the live object made the re-plan exit 2 and parity exit 1 naming the key; `manage_atlas=true` produced a plan with 2 Atlas resources, which the guard rejects. The workflow's first run on GitHub is still the real test.
+- **The plan is against an empty cluster, so it is never a real diff.** It always reads "create 4". It proves the config is valid, applies and converges; it does not show what a change would do to the local cluster. That is the price of holding no credentials, and it is the right price while the only real "environment" is a laptop.
+- **Atlas gets no plan coverage beyond the guard.** Its resources are validated but never planned in CI, for the same reason they have never been applied (ADR-029): that needs API keys and an import.
+- There is still **no CI for the application** — pytest and Vitest run only locally. This gate covers infrastructure only.
+
+**Re-evaluation trigger**: When remote state is enabled (ADR-029's S3 backend) and a real cluster exists, add a plan-only job against it with read-only credentials — that is when a real diff becomes worth the credential. If the twin definitions keep drifting, delete one side rather than guarding it harder: have `k8s-up.sh` call `terraform apply` for those three objects.
 
 ---
 
