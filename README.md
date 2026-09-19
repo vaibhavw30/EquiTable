@@ -121,6 +121,7 @@ EquiTable/
 │   └── monitoring/             # Helm values, ServiceMonitor, alert rules, dashboard JSON
 ├── terraform/                  # Namespace, ServiceAccounts, ConfigMap, Atlas (ADR-029)
 ├── .github/workflows/
+│   ├── tests.yml               # pytest (vs mongo:8.0) + vitest + build on every PR (ADR-033)
 │   └── terraform.yml           # Plan gate: plan → apply → re-plan on throwaway kind (ADR-032)
 ├── scripts/
 │   ├── k8s-up.sh               # Stand the whole stack up from scratch
@@ -129,7 +130,7 @@ EquiTable/
 │   └── check-tf-yaml-parity.sh # Terraform ↔ k8s/ YAML drift check (run in CI)
 ├── deploy/                     # Legacy ECS task-def + IAM policies (ADR-019)
 ├── docs/
-│   ├── decisions.md            # Architecture Decision Records (ADR-001 to ADR-032)
+│   ├── decisions.md            # Architecture Decision Records (ADR-001 to ADR-033)
 │   └── seed-strategy.md        # Multi-city expansion plan
 └── README.md
 ```
@@ -481,10 +482,19 @@ cd frontend
 npm run test
 ```
 
-CI (GitHub Actions) currently gates infrastructure only: every change to `terraform/` or the
-YAML it duplicates is formatted, validated, planned, applied to a throwaway kind cluster,
-re-planned (must be a no-op), and checked for drift against `k8s/` (ADR-032). The test suites
-above are not yet run in CI.
+CI (GitHub Actions) runs both suites on every PR (ADR-033). The backend runs on Python 3.12
+(the production image's interpreter) against a throwaway `mongo:8.0` service container, not
+Atlas, so no credentials are needed; `live` tests stay opt-in. The frontend runs Vitest and a
+production build. Every change to `terraform/` or the YAML it duplicates is also formatted,
+validated, planned, applied to a throwaway kind cluster, re-planned (must be a no-op), and
+checked for drift against `k8s/` (ADR-032).
+
+To run the backend suite the way CI does, without Atlas:
+
+```bash
+docker run -d --rm -p 27017:27017 --name equitable-test-mongo mongo:8.0
+MONGO_URI=mongodb://localhost:27017 python -m pytest tests/ -m "not live"
+```
 
 ## Tech Stack
 
@@ -510,7 +520,8 @@ above are not yet run in CI.
 - **Render** — Backend hosting (being migrated to Kubernetes, ADR-022)
 - **Kubernetes** — API Deployment + refresh CronJob, local `kind` cluster
 - **Prometheus + Grafana** — kube-prometheus-stack + Pushgateway for the CronJob (ADR-030/031)
-- **Terraform + GitHub Actions** — namespace-scoped config + Atlas as code, plan-gated in CI (ADR-029/032)
+- **GitHub Actions** — test gate on every PR (ADR-033); Terraform plan gate (ADR-032)
+- **Terraform** — namespace-scoped config + Atlas as code (ADR-029)
 - **AWS ECS Fargate + EventBridge** — the refresh agent's current production home (ADR-019)
 
 ## Cost
@@ -541,7 +552,7 @@ Everything below is free at current volume:
 
 ## Architecture Decisions
 
-Key decisions are documented in `docs/decisions.md` (ADR-001 through ADR-032). Highlights:
+Key decisions are documented in `docs/decisions.md` (ADR-001 through ADR-033). Highlights:
 
 - **ADR-008**: Crawl4AI replaces Firecrawl as primary scraper ($0 cost vs $0.01/page)
 - **ADR-011**: Google Places API (New) for pantry discovery
@@ -552,6 +563,7 @@ Key decisions are documented in `docs/decisions.md` (ADR-001 through ADR-032). H
 - **ADR-025**: Real health probes, and why liveness must not check MongoDB
 - **ADR-030**: Scraper metrics — pull for the API, Pushgateway for the CronJob
 - **ADR-032**: Terraform plan gate in CI — against a throwaway kind cluster, no credentials
+- **ADR-033**: App tests in CI against a MongoDB service container, not Atlas
 
 ## License
 

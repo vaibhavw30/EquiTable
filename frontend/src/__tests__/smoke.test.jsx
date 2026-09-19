@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, act, fireEvent } from '@testing-library/react'
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 // Mock Google Maps API — PantryMapClean uses @vis.gl/react-google-maps
@@ -169,14 +169,17 @@ describe('Smoke Tests', () => {
       })
       expect(screen.getByTestId('map-overlay')).toBeInTheDocument()
 
-      // Click close — the overlay starts its exit animation
+      // Click close — the overlay plays its exit animation, then unmounts.
+      // Assert the end state, never mid-animation state: depending on how
+      // fast the suite runs, the 0.2s exit may finish inside the click's
+      // act() or some frames later, so only "eventually gone" is stable.
       await act(async () => {
         fireEvent.click(screen.getByTestId('close-map-overlay'))
       })
 
-      // The close button should have been called (overlay is animating out)
-      // We verify the close was triggered by checking the button was clickable
-      expect(screen.getByTestId('close-map-overlay')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.queryByTestId('map-overlay')).not.toBeInTheDocument()
+      })
     })
   })
 })
